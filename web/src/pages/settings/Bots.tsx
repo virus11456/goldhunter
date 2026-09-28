@@ -162,7 +162,7 @@ export default function Bots() {
       ai_trader: { ...AI_TRADER_DEFAULT },
       name: '',
       account_id: accounts?.[0]?.id ?? '',
-      strategy_id: strategies?.find((s) => s.status === 'active' && !isTraderStrategy(s) && s.kind !== 'ai')?.id ?? '',
+      strategy_id: strategies?.find((s) => (s.status === 'active' || s.status === 'paper_only') && !isTraderStrategy(s) && s.kind !== 'ai')?.id ?? '',
       ai_model_id: models?.[0]?.id ?? '',
       symbols: ['crypto:BTC/USDT:perp'],
       timeframe: '15m',
@@ -230,7 +230,7 @@ export default function Bots() {
   }
 
   const accName = (id: number) => accounts?.find((a) => a.id === id)?.name ?? `#${id}`
-  const selectableStrategies = (strategies ?? []).filter((s) => !isTraderStrategy(s) && (s.status === 'active' || s.id === form?.strategy_id))
+  const selectableStrategies = (strategies ?? []).filter((s) => !isTraderStrategy(s) && (s.status === 'active' || s.status === 'paper_only' || s.id === form?.strategy_id))
   const referenceStrategies = (strategies ?? []).filter((s) => s.status === 'active' && s.kind !== 'ai' && s.kind !== 'tradingview')
   const modelSelect = form && (
     <select
@@ -244,7 +244,9 @@ export default function Bots() {
       ))}
     </select>
   )
-  const pendingCount = (strategies ?? []).filter((s) => s.status !== 'active').length
+  const pendingCount = (strategies ?? []).filter((s) => s.status === 'pending_review' && !isTraderStrategy(s)).length
+  const selAccount = accounts?.find((a) => a.id === form?.account_id)
+  const paperOnlyOnLive = !isTrader && strat?.status === 'paper_only' && selAccount?.paper === false
 
   return (
     <Card
@@ -378,7 +380,7 @@ export default function Bots() {
                 </select>
               </Field>
               {!isTrader && (
-              <Field label="策略" hint={pendingCount ? `有 ${pendingCount} 個策略待審核，需先審核啟用才能選擇` : undefined}>
+              <Field label="策略" hint={pendingCount ? `有 ${pendingCount} 個策略尚未通過審查，通過後才能選擇` : undefined}>
                 <select
                   className="input"
                   value={form.strategy_id}
@@ -387,10 +389,16 @@ export default function Bots() {
                   <option value="">請選擇</option>
                   {selectableStrategies.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.name}（{kindLabel(s.kind)}）{s.status !== 'active' ? '— 待審核' : ''}
+                      {s.name}（{kindLabel(s.kind)}）{s.status === 'paper_only' ? '（模擬期）' : s.status === 'pending_review' ? '— 待審核' : ''}
                     </option>
                   ))}
                 </select>
+                {paperOnlyOnLive && (
+                  <div className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-gold/40 bg-gold/10 px-2.5 py-1.5 text-xs text-amber-100">
+                    <Icons.alert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gold" />
+                    此策略仍在模擬期，只能用在模擬帳戶
+                  </div>
+                )}
               </Field>
               )}
               {isTrader && (

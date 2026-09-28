@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, type BacktestIn, type BacktestRun, type Params, type RiskConfig } from '../api'
 import { CandleChart, EquityChart } from '../components/charts'
+import { MetricsPanel } from '../components/metrics'
 import { NumInput, ParamsForm, RiskForm, SymbolPicker, baseOf } from '../components/forms'
 import { Card, Change, Collapsible, Empty, Field, Icons, SideBadge, Skeleton, Spinner, useAction, useConfirm, useLoader, useToast } from '../components/ui'
 import { fmtNum, fmtPrice, fmtQty, fmtSigned, fmtTime, kindLabel, pnlClass } from '../lib/format'
@@ -42,10 +43,20 @@ export default function Backtest() {
   const strat = selectable.find((s) => s.id === strategyId)
   const usesAi = useStrategyUsesAi(strat)
 
+  // 從策略頁「回測」按鈕進來：/backtest?strategy={id} → 預選該策略，並沿用它上次回測 / 審查的交易對與週期
+  const qsStrategy = sp.get('strategy')
   useEffect(() => {
-    if (!strategyId && selectable.length) setStrategyId(selectable[0].id)
+    if (!strategies) return
+    const want = qsStrategy ? selectable.find((s) => s.id === Number(qsStrategy)) : undefined
+    if (want) {
+      setStrategyId(want.id)
+      if (want.metrics?.symbol) setSymbol(want.metrics.symbol)
+      if (want.metrics?.timeframe && meta.timeframes.includes(want.metrics.timeframe)) setTimeframe(want.metrics.timeframe)
+    } else if (!selectable.some((s) => s.id === strategyId) && selectable.length) {
+      setStrategyId(selectable[0].id)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategies])
+  }, [strategies, qsStrategy])
   useEffect(() => {
     setParams({ ...(strat?.params ?? {}) })
   }, [strat])
@@ -113,14 +124,14 @@ export default function Backtest() {
                   {selectable.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
-                      {s.status !== 'active' ? '（待審核）' : ''}
+                      {s.status === 'pending_review' ? '（待審核）' : s.status === 'paper_only' ? '（模擬期）' : ''}
                     </option>
                   ))}
                 </select>
               </Field>
-              {strat && strat.status !== 'active' && (
+              {strat && strat.status === 'pending_review' && (
                 <div className="flex items-center gap-2 text-xs text-amber-200">
-                  <StrategyStatusBadge status={strat.status} /> 回測確認無誤後，到「設定 → 策略」審核啟用。
+                  <StrategyStatusBadge status={strat.status} /> 尚未通過審查，到「設定 → 策略」查看審查報告。
                 </div>
               )}
               {usesAi && (
@@ -272,20 +283,9 @@ export default function Backtest() {
   )
 }
 
-function Metric({ label, children, sub }: { label: string; children: ReactNode; sub?: ReactNode }) {
-  return (
-    <div className="rounded-xl border border-line bg-panel px-3.5 py-3">
-      <div className="text-[10.5px] font-medium uppercase tracking-[0.1em] text-muted">{label}</div>
-      <div className="num mt-1.5 font-mono text-lg font-semibold text-slate-50">{children}</div>
-      {sub && <div className="mt-0.5 text-[11px] text-muted">{sub}</div>}
-    </div>
-  )
-}
-
 function Result({ r }: { r: BacktestRun }) {
   const m = r.metrics ?? {}
   const equity = useMemo(() => r.equity_curve.map(([t, e]) => ({ t, equity: e })), [r])
-  const beat = (m.total_return_pct ?? 0) - (m.buy_and_hold_pct ?? 0)
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -300,22 +300,7 @@ function Result({ r }: { r: BacktestRun }) {
         <span className="ml-auto text-xs text-muted">#{r.id} · {fmtTime(r.created_at)}</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Metric label="總報酬" sub={<>買入持有 <Change v={m.buy_and_hold_pct} /></>}>
-          <Change v={m.total_return_pct} />
-        </Metric>
-        <Metric label="超額報酬" sub="相對買入持有">
-          <span className={pnlClass(beat)}>{fmtSigned(beat, 2, '%')}</span>
-        </Metric>
-        <Metric label="最大回撤">
-          <span className="text-down">{fmtNum(m.max_drawdown_pct)}%</span>
-        </Metric>
-        <Metric label="Sharpe">{fmtNum(m.sharpe)}</Metric>
-        <Metric label="勝率" sub={`已平倉 ${m.closed_trades ?? 0} 筆`}>{fmtNum(m.win_rate_pct, 1)}%</Metric>
-        <Metric label="獲利因子">{m.profit_factor === null || m.profit_factor === undefined ? '—' : fmtNum(m.profit_factor)}</Metric>
-        <Metric label="成交筆數" sub={`K 棒 ${m.bars ?? '—'} 根`}>{m.trades ?? 0}</Metric>
-        <Metric label="總手續費" sub={`期末權益 ${fmtNum(m.final_equity)}`}>{fmtNum(m.total_fees)}</Metric>
-      </div>
+      <MetricsPanel m={m} />
 
       <Card title="權益曲線" icon={<Icons.chart />}>
         {equity.length ? <EquityChart data={equity} initial={m.initial_equity} /> : <Empty title="沒有權益資料" />}

@@ -228,7 +228,32 @@ export interface AIModelIn {
 
 export type TestAIResult = { ok: true; model: string; reply: unknown } | { ok: false; error: string }
 
-export type StrategyStatus = 'active' | 'pending_review' | string
+export type StrategyStatus = 'active' | 'pending_review' | 'paper_only' | string
+
+export interface PaperProgress {
+  days: number
+  days_required: number
+  trades: number
+  trades_required: number
+  ready: boolean
+}
+
+export interface ReviewStage {
+  key: 'safety' | 'smoke' | 'cross' | 'tv' | string
+  name: string
+  status: 'passed' | 'failed' | 'skipped' | string
+  summary: string
+  details: string[]
+}
+
+export interface ReviewReport {
+  passed: boolean
+  stages: ReviewStage[]
+  reviewed_at: string
+  symbol: string
+  timeframe: string
+  metrics: StrategyMetrics
+}
 
 export interface Strategy {
   id: number
@@ -238,7 +263,32 @@ export interface Strategy {
   code: string | null
   pine_source: string | null
   status: StrategyStatus
+  status_label?: string
+  paper_progress?: PaperProgress | null
+  review?: ReviewReport | Record<string, never> | null
+  metrics?: StrategyMetrics | null
+  approved_at?: ISODate | null
+  paper_days?: number
+  min_paper_trades?: number
   created_at: ISODate
+}
+
+/** Settings used by the automatic review (market data + optional TradingView trade list CSV) */
+export interface ReviewSettings {
+  exchange_id?: string
+  symbol?: string
+  timeframe?: string
+  tv_csv?: string | null
+}
+
+export interface ReviewIn extends ReviewSettings {
+  ai_model_id: number
+}
+
+export interface ConvertPineIn extends ReviewSettings {
+  name: string
+  pine: string
+  ai_model_id: number
 }
 
 export interface StrategyIn {
@@ -262,6 +312,16 @@ export interface ConversionResult {
 
 export interface ConvertPineResult {
   strategy: Strategy
+  conversion: ConversionResult
+  review: ReviewReport | null
+}
+
+export interface ReviewResult {
+  strategy: Strategy
+  review: ReviewReport | null
+}
+
+export interface FixResult extends ReviewResult {
   conversion: ConversionResult
 }
 
@@ -509,20 +569,52 @@ export interface BacktestIn {
   max_ai_calls: number
 }
 
-export interface BacktestMetrics {
+/** Keys produced by backend backtest/engine.py compute_metrics (percentages already ×100). Older records may lack keys. */
+export interface StrategyMetrics {
+  // 報酬
   initial_equity?: number
   final_equity?: number
   total_return_pct?: number
+  cagr_pct?: number
   buy_and_hold_pct?: number
+  excess_return_pct?: number
+  // 風險
   max_drawdown_pct?: number
+  max_drawdown_bars?: number
+  max_drawdown_days?: number
+  volatility_pct?: number
+  // 風險調整後
   sharpe?: number
+  sortino?: number
+  calmar?: number | null
+  // 交易品質
   trades?: number
   closed_trades?: number
   win_rate_pct?: number
+  payoff_ratio?: number | null
   profit_factor?: number | null
+  expectancy?: number
+  avg_win?: number
+  avg_loss?: number
+  best_trade?: number | null
+  worst_trade?: number | null
+  max_consecutive_losses?: number
+  // 效率與成本
+  avg_hold_hours?: number | null
+  exposure_pct?: number
   total_fees?: number
   bars?: number
+  days?: number
+  // context (StrategyConfig.metrics only)
+  symbol?: string
+  timeframe?: string
+  start?: string
+  end?: string
+  source?: 'backtest' | 'review' | string
 }
+
+/** @deprecated use StrategyMetrics */
+export type BacktestMetrics = StrategyMetrics
 
 export interface BacktestTrade {
   ts: number // ms
@@ -542,7 +634,7 @@ export interface BacktestSummary {
   instrument: string
   timeframe: string
   config: Partial<BacktestIn> & Record<string, unknown>
-  metrics: BacktestMetrics
+  metrics: StrategyMetrics
   created_at: ISODate
 }
 
@@ -580,8 +672,10 @@ export const api = {
   deleteStrategy: (id: number) => del<{ ok: boolean }>(`/strategies/${id}`),
   activateStrategy: (id: number) => post<Strategy>(`/strategies/${id}/activate`),
   validateStrategy: (code: string) => post<ValidateResult>('/strategies/validate', { code }),
-  convertPine: (b: { name: string; pine: string; ai_model_id: number }) =>
-    post<ConvertPineResult>('/strategies/convert-pine', b),
+  convertPine: (b: ConvertPineIn) => post<ConvertPineResult>('/strategies/convert-pine', b),
+  reviewStrategy: (id: number, b: ReviewIn) => post<ReviewResult>(`/strategies/${id}/review`, b),
+  fixStrategy: (id: number, b: ReviewIn) => post<FixResult>(`/strategies/${id}/fix`, b),
+  promoteStrategy: (id: number) => post<Strategy>(`/strategies/${id}/promote`),
 
   // bots
   listBots: () => get<Bot[]>('/bots'),
