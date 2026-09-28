@@ -10,6 +10,14 @@ GoldHunter 把「你寫好的策略（含 TradingView Pine Script）」、「AI 
 
 > ⚠️ **風險警語**：程式交易與槓桿合約具高度風險，可能損失全部本金。本專案僅供研究與學習，不構成投資建議。請務必先用「模擬交易」與「回測」充分驗證，實盤請從小資金開始。
 
+| 監控：有 AI vs 無 AI 對照、AI 決策紀錄 | AI 副駕駛設定 |
+|---|---|
+| ![監控](docs/screenshots/monitor.png) | ![AI 副駕駛](docs/screenshots/bot-copilot.png) |
+| **回測：K 線買賣點與績效** | **Pine Script 轉 Python** |
+| ![回測](docs/screenshots/backtest.png) | ![Pine 轉換](docs/screenshots/pine-convert.png) |
+| **AI 看到的市場情報** | **總覽** |
+| ![情報](docs/screenshots/intel.png) | ![總覽](docs/screenshots/dashboard.png) |
+
 ---
 
 ## 目錄

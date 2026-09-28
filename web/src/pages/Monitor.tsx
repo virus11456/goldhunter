@@ -2,7 +2,6 @@ import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, type Bot, type DecisionLog, type DecisionPayload, type TuningRun } from '../api'
 import { EquityChart } from '../components/charts'
-import { baseOf } from '../components/forms'
 import {
   AiBadge,
   BotStatusBadge,
@@ -165,7 +164,7 @@ function BotCard({ b, selected, onSelect, onToggle, busy }: { b: Bot; selected: 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="truncate font-semibold text-slate-100">{b.name}</span>
-            {b.copilot_active && <AiBadge />}
+            {(b.copilot_active || b.copilot_enabled) && <AiBadge />}
           </div>
           <div className="mt-0.5 truncate text-xs">
             <span className="text-gold/90">{b.strategy_name ?? '—'}</span>
@@ -666,9 +665,13 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                   <td><SourceChip source={d.source} /></td>
                   <td className={`whitespace-nowrap font-medium ${act.cls}`}>{act.text}</td>
                   <td className="whitespace-nowrap">
-                    <span className={`mr-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full ${d.approved ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`} title={d.approved ? '已執行' : '未執行'}>
-                      {d.approved ? <Icons.check className="h-3 w-3" /> : <Icons.x className="h-3 w-3" />}
-                    </span>
+                    {d.action === 'hold' ? (
+                      <span className="mr-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-500/15 text-muted" title="觀望，無需執行">—</span>
+                    ) : (
+                      <span className={`mr-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full ${d.approved ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`} title={d.approved ? '已執行' : '未執行'}>
+                        {d.approved ? <Icons.check className="h-3 w-3" /> : <Icons.x className="h-3 w-3" />}
+                      </span>
+                    )}
                     {v && <span className={`badge ${v.cls}`}>{v.label}</span>}
                   </td>
                   <td className="r whitespace-nowrap font-mono text-xs">

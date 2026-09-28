@@ -210,3 +210,13 @@ def test_pending_strategy_cannot_start(client):
     assert client.post(f"/api/strategies/{st_id}/activate", headers=H).json()["status"] == "active"
     assert client.post(f"/api/bots/{bot['id']}/start", headers=H).status_code == 200
     client.post(f"/api/bots/{bot['id']}/stop", headers=H)
+
+
+def test_baseline_exists_before_first_signal(client):
+    bot = _setup_bot(client, {"review": True, "manage": False, "event_blackout_min": 0})
+    client.post(f"/api/bots/{bot['id']}/start", headers=H)
+    runner = manager.runners[bot["id"]]
+    client.portal.call(runner.tick)
+    assert runner.baseline is not None
+    assert runner.baseline.equity() == pytest.approx(10_000)
+    client.post(f"/api/bots/{bot['id']}/stop", headers=H)

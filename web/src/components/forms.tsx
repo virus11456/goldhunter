@@ -104,14 +104,12 @@ export function NumInput({
   onChange,
   placeholder,
   step = 'any',
-  nullable = false,
   className = '',
 }: {
   value: number | null | undefined
   onChange: (v: number | null) => void
   placeholder?: string
   step?: string | number
-  nullable?: boolean
   className?: string
 }) {
   const [text, setText] = useState<string>(value === null || value === undefined ? '' : String(value))
@@ -169,7 +167,6 @@ export function RiskForm({ value, defaults, onChange }: { value: Partial<RiskCon
             <NumInput
               value={get(f.key) as number | null}
               step={f.step ?? 'any'}
-              nullable={f.nullable}
               placeholder={defaults[f.key] === null ? '留空' : String(defaults[f.key])}
               onChange={(v) => {
                 if (v === null && !f.nullable) {

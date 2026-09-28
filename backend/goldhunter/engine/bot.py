@@ -144,6 +144,10 @@ class BotRunner:
     async def tick(self) -> None:
         async with self._lock:
             self.last_run_at = _utcnow()
+            if self.copilot_active and self.baseline is None:
+                # 對照組必須在第一個訊號之前建立，才能公平比較
+                start_equity = (await self.exchange.fetch_balance()).total
+                self.baseline = PaperExchange(initial_cash=start_equity, fee_rate=0.0005, slippage=0.0005)
             for inst in self.instruments:
                 candles = await self.exchange.fetch_candles(inst, self.timeframe, 300)
                 if len(candles) < 2:
@@ -174,10 +178,6 @@ class BotRunner:
                 await self._process_signal(decision, ctx, price, ai_result)
 
             balance = await self.exchange.fetch_balance()
-            if self.copilot_active and self.baseline is None:
-                self.baseline = PaperExchange(initial_cash=balance.total, fee_rate=0.0005, slippage=0.0005)
-                for i, p in self.last_price.items():
-                    self.baseline.set_price(i, p)
             self._save(EquitySnapshot(bot_id=self.bot_id, equity=balance.total,
                                       baseline_equity=self.baseline.equity() if self.baseline else None))
         self._maybe_start_tune()

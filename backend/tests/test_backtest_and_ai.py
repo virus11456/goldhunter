@@ -132,3 +132,17 @@ def test_hyperliquid_symbol_mapping():
 
     assert exchange_symbol("hyperliquid", BTC_PERP) == "BTC/USDC:USDC"
     assert exchange_symbol("binance", BTC_PERP) == "BTC/USDT:USDT"
+
+
+async def test_ma_cross_reverses_into_short(candles):
+    r = await run_backtest(MACrossStrategy({"fast": 5, "slow": 20}), BTC_PERP, "1h", candles)
+    pos, went_short = 0.0, False
+    for t in r.trades:
+        pos += t.quantity if t.side == "buy" else -t.quantity
+        went_short |= pos < -1e-9
+    assert went_short, "允許做空時應該會反手做空"
+    r2 = await run_backtest(MACrossStrategy({"fast": 5, "slow": 20, "allow_short": False}), BTC_PERP, "1h", candles)
+    pos = 0.0
+    for t in r2.trades:
+        pos += t.quantity if t.side == "buy" else -t.quantity
+        assert pos >= -1e-9

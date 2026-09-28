@@ -18,18 +18,17 @@ class MACrossStrategy(Strategy):
         a = ta.atr(ctx.high, ctx.low, close, 14)[-1] or 0
         pos = ctx.position_size
         k = self.p("atr_mult")
-        if ta.crossover(fast, slow):
-            if pos < 0:
-                return ctx.close_position("快線上穿慢線，空單平倉")
-            if pos == 0:
-                return ctx.long(self.p("size_pct"), stop_loss=ctx.price - k * a, leverage=self.p("leverage"),
-                                reasoning="EMA 快線上穿慢線")
-        if ta.crossunder(fast, slow):
+        can_short = self.p("allow_short") and ctx.capabilities.supports_short
+        if ta.crossover(fast, slow) and pos <= 0:
+            # 空手做多；持有空單時反手（風控會先平空再開多）
+            return ctx.long(self.p("size_pct"), stop_loss=ctx.price - k * a, leverage=self.p("leverage"),
+                            reasoning="EMA 快線上穿慢線" + ("，空單反手做多" if pos < 0 else ""))
+        if ta.crossunder(fast, slow) and pos >= 0:
+            if can_short:
+                return ctx.short(self.p("size_pct"), stop_loss=ctx.price + k * a, leverage=self.p("leverage"),
+                                 reasoning="EMA 快線下穿慢線" + ("，多單反手做空" if pos > 0 else ""))
             if pos > 0:
                 return ctx.close_position("快線下穿慢線，多單平倉")
-            if pos == 0 and self.p("allow_short") and ctx.capabilities.supports_short:
-                return ctx.short(self.p("size_pct"), stop_loss=ctx.price + k * a, leverage=self.p("leverage"),
-                                 reasoning="EMA 快線下穿慢線")
         return None
 
 

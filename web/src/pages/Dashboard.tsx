@@ -110,7 +110,7 @@ export default function Dashboard() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate font-semibold text-slate-100">{b.name}</span>
-                    {b.copilot_active && <AiBadge />}
+                    {(b.copilot_active || b.copilot_enabled) && <AiBadge />}
                     {b.halted_reason && <span className="badge badge-red">熔斷</span>}
                   </div>
                   <div className="mt-0.5 truncate text-xs">

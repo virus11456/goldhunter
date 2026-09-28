@@ -39,6 +39,9 @@ def bot_out(b: Bot, s: Session) -> dict:
     d["strategy_kind"] = strat.kind if strat else None
     d["running"] = bool(runner and runner.running)
     d["copilot"] = CopilotConfig(**(b.copilot or {})).model_dump()
+    cp = d["copilot"]
+    # 設定上有開啟 AI 副駕駛（不論是否運行中）；copilot_active＝目前正在運作
+    d["copilot_enabled"] = bool(b.ai_model_id and (cp["review"] or cp["manage"] or cp["tune"]))
     d["copilot_active"] = bool(runner and runner.copilot_active)
     d["halted_reason"] = runner.risk_state.halted_reason if runner else None
     if runner:
@@ -244,7 +247,7 @@ async def tune_now(bot_id: int):
 @router.post("/tuning/{run_id}/apply")
 def apply_tuning(run_id: int, s: Session = Depends(get_session)):
     run = s.get(TuningRun, run_id) or _404()
-    if run.status not in ("proposed", "rejected"):
+    if run.status not in ("proposed", "rejected") or not run.proposed_params:
         raise HTTPException(400, f"此建議狀態為 {run.status}，無法套用")
     runner = manager.runners.get(run.bot_id)
     if runner and runner.strategy:

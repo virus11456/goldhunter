@@ -283,6 +283,7 @@ export interface Bot {
   equity: number | null
   baseline_equity: number | null
   copilot_active: boolean
+  copilot_enabled: boolean
 }
 
 export interface BotIn {
