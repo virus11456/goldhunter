@@ -34,6 +34,29 @@ function notFound(): never {
   throw new ApiError(404, '找不到資料')
 }
 
+/** 與後端相同：選 AI 交易員時自動建立（或更新）Bot 專屬策略 */
+function traderStrategy(body: Json, bot?: Json): Json | null {
+  if (!body.ai_trader) return null
+  if (!body.ai_model_id) throw new ApiError(400, 'AI 交易員需要選擇 AI 模型')
+  const params = { bars: 40, ...body.ai_trader }
+  let st = bot && db.strategies.find((s: Json) => s.id === bot.strategy_id && s.kind === 'ai' && s.name.startsWith('AI 交易員｜'))
+  if (!st) {
+    st = { id: nextId++, name: `AI 交易員｜${body.name}`, kind: 'ai', code: null, pine_source: null, status: 'active', created_at: now() }
+    db.strategies.push(st)
+  }
+  st.params = params
+  return st
+}
+
+function modeFields(st: Json) {
+  const mode = st?.kind === 'ai' ? 'ai_trader' : st?.kind === 'tradingview' ? 'tradingview' : 'strategy'
+  const p = st?.params ?? {}
+  return {
+    mode,
+    ai_trader: mode === 'ai_trader' ? { instructions: p.instructions, reference_strategy_id: p.reference_strategy_id ?? null, min_confidence: p.min_confidence ?? 0.6 } : null,
+  }
+}
+
 export async function mockRequest(method: string, fullPath: string, body?: Json): Promise<Json> {
   await wait(method === 'GET' ? 120 : 350)
   const [path, qs] = fullPath.split('?')
@@ -64,7 +87,7 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
       case 'trades':
         return byBot(db.trades, q, 200)
       case 'decisions':
-        return byBot(db.decisions, q, 100)
+        return byBot(q.get('hide_hold') === 'true' ? db.decisions.filter((d: Json) => d.action !== 'hold') : db.decisions, q, 100)
       case 'tuning':
         return byBot(db.tuning, q, 50)
       case 'equity': {
@@ -215,13 +238,15 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
       return run
     }
     if (method === 'POST') {
-      const st = db.strategies.find((s: Json) => s.id === body.strategy_id)
+      const st = traderStrategy(body) ?? db.strategies.find((s: Json) => s.id === body.strategy_id)
       const copilot = { ...db.meta.copilot_defaults, ...(body.copilot || {}) }
       const b = { id: nextId++, created_at: now(), status: 'stopped', running: false, last_error: null, last_run_at: null,
         webhook_secret: Math.random().toString(36).slice(2, 14), equity: null, baseline_equity: null, halted_reason: null,
         params_override: {}, ...body, copilot, risk: { ...db.meta.risk_defaults, ...(body.risk || {}) },
         strategy_name: st?.name ?? null, strategy_kind: st?.kind ?? null,
-        copilot_enabled: !!body.ai_model_id && (copilot.review || copilot.manage || copilot.tune), copilot_active: false }
+        copilot_enabled: !!body.ai_model_id && (copilot.review || copilot.manage || copilot.tune), copilot_active: false,
+        ...modeFields(st), strategy_id: st?.id ?? null }
+      delete b.ai_trader_in
       db.bots.push(b)
       db.equity[String(b.id)] = []
       db.positions[String(b.id)] = { running: false, positions: [], balance: null }
@@ -229,9 +254,9 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
     }
     if (method === 'PUT') {
       if (bot.running) throw new ApiError(400, '請先停止 Bot 再修改設定')
-      const st = db.strategies.find((s: Json) => s.id === body.strategy_id)
+      const st = traderStrategy(body, bot) ?? db.strategies.find((s: Json) => s.id === body.strategy_id)
       const copilot = { ...db.meta.copilot_defaults, ...(body.copilot || {}) }
-      Object.assign(bot, body, { copilot, strategy_name: st?.name, strategy_kind: st?.kind,
+      Object.assign(bot, body, modeFields(st), { strategy_id: st?.id, copilot, strategy_name: st?.name, strategy_kind: st?.kind,
         copilot_enabled: !!body.ai_model_id && (copilot.review || copilot.manage || copilot.tune) })
       return bot
     }

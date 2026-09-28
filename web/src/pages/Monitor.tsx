@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, type Bot, type DecisionLog, type DecisionPayload, type TuningRun } from '../api'
 import { EquityChart } from '../components/charts'
 import {
-  AiBadge,
+  BotAiBadge,
   BotStatusBadge,
   Card,
   Change,
@@ -164,7 +164,7 @@ function BotCard({ b, selected, onSelect, onToggle, busy }: { b: Bot; selected: 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="truncate font-semibold text-slate-100">{b.name}</span>
-            {(b.copilot_active || b.copilot_enabled) && <AiBadge />}
+            <BotAiBadge bot={b} />
           </div>
           <div className="mt-0.5 truncate text-xs">
             <span className="text-gold/90">{b.strategy_name ?? '—'}</span>
@@ -438,7 +438,7 @@ function TuningPanel({ bot, botsById }: { bot: Bot | null; botsById: Record<numb
         <Empty
           icon={<Icons.sparkle className="h-5 w-5" />}
           title="尚無微調紀錄"
-          hint={bot && !tuneOn ? '此 Bot 未開啟「參數微調」，可在 Bot 設定的 AI 副駕駛區塊開啟。' : 'AI 會依設定的間隔自動提出參數建議，並以樣本外回測比較。'}
+          hint={bot && !tuneOn ? '此 Bot 未開啟「參數微調」，可在 Bot 設定的「AI 審核」區塊開啟。' : 'AI 會依設定的間隔自動提出參數建議，並以樣本外回測比較。'}
         />
       ) : (
         <div className="space-y-3">
@@ -624,12 +624,27 @@ function Compare({ a, b }: { a: DecisionPayload; b: DecisionPayload }) {
 }
 
 function DecisionsTable({ botId, names }: { botId: number | null; names: Record<number, string> }) {
-  const { data, loading } = useLoader(() => api.decisions(botId, 100), [botId], REFRESH)
+  const [hideHold, setHideHold] = useState(true)
+  const { data, loading } = useLoader(() => api.decisions(botId, 100, hideHold), [botId, hideHold], REFRESH)
   const [open, setOpen] = useState<Record<number, boolean>>({})
+  const toggle = (
+    <label className="flex cursor-pointer items-center gap-2 border-b border-line px-4 py-2 text-xs text-muted">
+      <input type="checkbox" className="accent-[#F0B90B]" checked={hideHold} onChange={(e) => setHideHold(e.target.checked)} />
+      隱藏「觀望 / 維持」（AI 沒有動作的判斷）
+    </label>
+  )
   if (loading && !data) return <Skeleton className="p-4" />
-  if (!data?.length) return <Empty icon={<Icons.brain className="h-5 w-5" />} title="尚無決策紀錄" hint="策略、AI 或 TradingView 產生訊號後會記錄在這裡（含被風控拒絕的）。" />
+  if (!data?.length)
+    return (
+      <>
+        {toggle}
+        <Empty icon={<Icons.brain className="h-5 w-5" />} title="尚無決策紀錄" hint="策略、AI 或 TradingView 產生訊號後會記錄在這裡（含被風控拒絕的）。" />
+      </>
+    )
   const cols = botId ? 9 : 10
   return (
+    <>
+    {toggle}
     <div className="tbl-wrap max-h-[640px] rounded-none border-0">
       <table className="tbl">
         <thead>
@@ -698,7 +713,7 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                           {cp && (
                             <div className="rounded-lg border border-gold/30 bg-gold/[0.05] p-3">
                               <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-gold">
-                                <Icons.sparkle className="h-3.5 w-3.5" /> AI 副駕駛審核 {v && <span className={`badge ${v.cls}`}>{v.label}</span>}
+                                <Icons.sparkle className="h-3.5 w-3.5" /> AI 審核 {v && <span className={`badge ${v.cls}`}>{v.label}</span>}
                               </div>
                               <p className="whitespace-pre-wrap leading-relaxed text-slate-200">{cp.reasoning}</p>
                               {cp.notes?.length > 0 && (
@@ -748,5 +763,6 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
         </tbody>
       </table>
     </div>
+    </>
   )
 }

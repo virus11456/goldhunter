@@ -57,7 +57,7 @@ export default function AIModels() {
       {loading ? (
         <Skeleton />
       ) : !data?.length ? (
-        <Empty icon={<Icons.brain className="h-5 w-5" />} title="尚未新增 AI 模型" hint="AI 副駕駛、AI 策略與 Pine Script 轉換都需要一個 AI 模型。" />
+        <Empty icon={<Icons.brain className="h-5 w-5" />} title="尚未新增 AI 模型" hint="AI 交易員、AI 審核與 Pine Script 轉換都需要一個 AI 模型。" />
       ) : (
         <div className="space-y-2.5">
           {data.map((m) => (

@@ -382,13 +382,20 @@ export function SideBadge({ side }: { side: string }) {
   return <span className={`inline-block rounded px-1.5 py-0.5 text-[11px] font-semibold ${long ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>{label}</span>
 }
 
-export function AiBadge() {
+/** AI 交易員（AI 自主決策）或 AI 審核（你的策略 + AI 把關） */
+export function AiBadge({ mode = 'review' }: { mode?: 'trader' | 'review' }) {
   return (
     <span className="badge border-gold/40 bg-gold/10 text-gold">
       <Icons.sparkle className="h-3 w-3" />
-      AI 副駕駛
+      {mode === 'trader' ? 'AI 交易員' : 'AI 審核'}
     </span>
   )
+}
+
+export function BotAiBadge({ bot }: { bot: { mode?: string; copilot_active?: boolean; copilot_enabled?: boolean } }) {
+  if (bot.mode === 'ai_trader') return <AiBadge mode="trader" />
+  if (bot.copilot_active || bot.copilot_enabled) return <AiBadge mode="review" />
+  return null
 }
 
 // ------------------------------ Hooks ------------------------------

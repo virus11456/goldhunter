@@ -119,7 +119,7 @@ export function EquityChart({ data, height = 260, initial }: { data: EquityDatum
           <Line
             type="monotone"
             dataKey="equity"
-            name={hasBaseline ? '有 AI 副駕駛' : '權益'}
+            name={hasBaseline ? '有 AI 審核' : '權益'}
             stroke={CHART.gold}
             strokeWidth={2}
             dot={false}

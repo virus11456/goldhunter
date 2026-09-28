@@ -291,12 +291,23 @@ export interface Bot {
   baseline_equity: number | null
   copilot_active: boolean
   copilot_enabled: boolean
+  mode: BotMode
+  ai_trader: AITraderIn | null
+}
+
+export type BotMode = 'ai_trader' | 'strategy' | 'tradingview'
+
+export interface AITraderIn {
+  instructions: string
+  reference_strategy_id: number | null
+  min_confidence: number
 }
 
 export interface BotIn {
   name: string
   account_id: number
-  strategy_id: number
+  strategy_id: number | null
+  ai_trader?: AITraderIn | null
   ai_model_id: number | null
   symbols: string[]
   timeframe: string
@@ -587,8 +598,8 @@ export const api = {
   // records
   trades: (botId?: number | null, limit = 200) =>
     get<Trade[]>(`/trades?limit=${limit}${botId ? `&bot_id=${botId}` : ''}`),
-  decisions: (botId?: number | null, limit = 100) =>
-    get<DecisionLog[]>(`/decisions?limit=${limit}${botId ? `&bot_id=${botId}` : ''}`),
+  decisions: (botId?: number | null, limit = 100, hideHold = false) =>
+    get<DecisionLog[]>(`/decisions?limit=${limit}${botId ? `&bot_id=${botId}` : ''}${hideHold ? '&hide_hold=true' : ''}`),
   equity: (botId: number, hours = 168) => get<EquityPoint[]>(`/equity?bot_id=${botId}&hours=${hours}`),
   dashboard: () => get<Dashboard>('/dashboard'),
 

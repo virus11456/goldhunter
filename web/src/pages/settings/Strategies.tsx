@@ -21,7 +21,10 @@ interface Form {
 
 export default function Strategies() {
   const meta = useMeta()
-  const { data, loading, reload } = useLoader(() => api.listStrategies(), [])
+  const { data: all, loading, reload } = useLoader(() => api.listStrategies(), [])
+  // AI 交易員的專屬策略由 Bot 設定管理，不在這裡顯示
+  const data = all?.filter((s) => !(s.kind === 'ai' && s.name.startsWith('AI 交易員｜')))
+  const creatableTypes = meta.strategy_types.filter((t) => t.type !== 'ai')
   const { data: models } = useLoader(() => api.listAIModels(), [])
   const [form, setForm] = useState<Form | null>(null)
   const [validation, setValidation] = useState<ValidateResult | null>(null)
@@ -33,7 +36,7 @@ export default function Strategies() {
   const typeMeta = (k: string) => meta.strategy_types.find((t) => t.type === k)
 
   const openCreate = () => {
-    const t = meta.strategy_types[0]
+    const t = creatableTypes[0]
     setValidation(null)
     setForm({ id: null, name: '', kind: t.type, params: { ...t.default_params }, code: meta.strategy_template })
   }
@@ -186,7 +189,7 @@ export default function Strategies() {
               </Field>
               <Field label="類型">
                 <select className="input" value={form.kind} onChange={(e) => changeKind(e.target.value)} disabled={!!form.id}>
-                  {meta.strategy_types.map((t) => (
+                  {(form.kind === 'ai' ? meta.strategy_types : creatableTypes).map((t) => (
                     <option key={t.type} value={t.type}>{kindLabel(t.type)}</option>
                   ))}
                 </select>

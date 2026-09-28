@@ -91,7 +91,7 @@ const PARAM_LABELS: Record<string, string> = {
 export const KIND_LABELS: Record<string, string> = {
   ma_cross: '均線交叉',
   rsi_reversion: 'RSI 均值回歸',
-  ai: 'AI 決策',
+  ai: 'AI 交易員',
   python: '自訂 Python',
   tradingview: 'TradingView 訊號',
 }

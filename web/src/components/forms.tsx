@@ -325,7 +325,7 @@ export function CopilotForm({
     <div className="space-y-3">
       {strategyUsesAi && (
         <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
-          此策略本身就是 AI 決策，訊號審核與持倉管理不會另外介入（事件避險仍有效）。
+          此策略本身就是 AI 交易員，訊號審核與持倉管理不會另外介入（事件避險仍有效）。
         </div>
       )}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">

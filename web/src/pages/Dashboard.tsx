@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import { AiBadge, BotStatusBadge, Card, Empty, Icons, Skeleton, Spinner, StatCard, useAction, useConfirm, useLoader } from '../components/ui'
+import { BotAiBadge, BotStatusBadge, Card, Empty, Icons, Skeleton, Spinner, StatCard, useAction, useConfirm, useLoader } from '../components/ui'
 import { baseOf } from '../components/forms'
 import { fmtNum, fmtSigned, kindLabel, pnlClass, timeAgo } from '../lib/format'
 
@@ -110,7 +110,7 @@ export default function Dashboard() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate font-semibold text-slate-100">{b.name}</span>
-                    {(b.copilot_active || b.copilot_enabled) && <AiBadge />}
+                    <BotAiBadge bot={b} />
                     {b.halted_reason && <span className="badge badge-red">熔斷</span>}
                   </div>
                   <div className="mt-0.5 truncate text-xs">

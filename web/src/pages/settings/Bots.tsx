@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Bot, type BotIn, type CopilotConfig, type Params, type RiskConfig, type Strategy } from '../../api'
+import { api, type AITraderIn, type Bot, type BotIn, type CopilotConfig, type Params, type RiskConfig, type Strategy } from '../../api'
 import { CopilotForm, NumInput, ParamsForm, RiskForm, SymbolsInput, baseOf, copilotNeedsAi } from '../../components/forms'
 import {
-  AiBadge,
+  BotAiBadge,
   BotStatusBadge,
   Card,
   Collapsible,
@@ -22,8 +22,20 @@ import {
 import { kindLabel } from '../../lib/format'
 import { useMeta } from '../../lib/meta'
 
+type Mode = 'ai_trader' | 'strategy'
+
+const AI_TRADER_DEFAULT: AITraderIn = {
+  instructions: '順勢交易為主，嚴格止損，盈虧比至少 1:2；重大數據公布前不追價。',
+  reference_strategy_id: null,
+  min_confidence: 0.6,
+}
+
+const isTraderStrategy = (s: Strategy) => s.kind === 'ai' && s.name.startsWith('AI 交易員｜')
+
 interface Form {
   id: number | null
+  mode: Mode
+  ai_trader: AITraderIn
   name: string
   account_id: number | ''
   strategy_id: number | ''
@@ -137,17 +149,20 @@ export default function Bots() {
   const confirm = useConfirm()
   const toast = useToast()
 
-  const strat = useMemo(() => strategies?.find((s) => s.id === form?.strategy_id), [strategies, form?.strategy_id])
+  const isTrader = form?.mode === 'ai_trader'
+  const strat = useMemo(() => (isTrader ? undefined : strategies?.find((s) => s.id === form?.strategy_id)), [strategies, form?.strategy_id, isTrader])
   const stratUsesAi = useStrategyUsesAi(strat)
-  const aiRequired = form ? stratUsesAi || (strat?.kind !== 'tradingview' && copilotNeedsAi(form.copilot)) : false
+  const aiRequired = form ? isTrader || stratUsesAi || (strat?.kind !== 'tradingview' && copilotNeedsAi(form.copilot)) : false
   const strategyParams: Params = useMemo(() => ({ ...(strat?.params ?? {}) }), [strat])
 
   const openCreate = () =>
     setForm({
       id: null,
+      mode: 'ai_trader',
+      ai_trader: { ...AI_TRADER_DEFAULT },
       name: '',
       account_id: accounts?.[0]?.id ?? '',
-      strategy_id: strategies?.find((s) => s.status === 'active')?.id ?? '',
+      strategy_id: strategies?.find((s) => s.status === 'active' && !isTraderStrategy(s) && s.kind !== 'ai')?.id ?? '',
       ai_model_id: models?.[0]?.id ?? '',
       symbols: ['crypto:BTC/USDT:perp'],
       timeframe: '15m',
@@ -160,6 +175,8 @@ export default function Bots() {
   const openEdit = (b: Bot) =>
     setForm({
       id: b.id,
+      mode: b.mode === 'ai_trader' ? 'ai_trader' : 'strategy',
+      ai_trader: { ...AI_TRADER_DEFAULT, ...(b.ai_trader ?? {}), instructions: b.ai_trader?.instructions || AI_TRADER_DEFAULT.instructions },
       name: b.name,
       account_id: b.account_id,
       strategy_id: b.strategy_id,
@@ -176,23 +193,24 @@ export default function Bots() {
     if (!form) return
     if (!form.name.trim()) return toast.error('請輸入 Bot 名稱')
     if (!form.account_id) return toast.error('請選擇交易所帳戶')
-    if (!form.strategy_id) return toast.error('請選擇策略')
+    if (!isTrader && !form.strategy_id) return toast.error('請選擇策略')
     if (!form.symbols.length) return toast.error('至少需要一個交易對')
-    if (aiRequired && !form.ai_model_id) return toast.error('此設定需要 AI 模型（AI 策略或已開啟 AI 副駕駛）')
+    if (aiRequired && !form.ai_model_id) return toast.error(isTrader ? 'AI 交易員需要選擇 AI 模型' : '此設定需要 AI 模型（AI 策略或已開啟 AI 審核）')
     const base = strat?.params ?? {}
     const override: Params = {}
     for (const [k, v] of Object.entries(form.params_override)) if (JSON.stringify(base[k]) !== JSON.stringify(v)) override[k] = v
     const body: BotIn = {
       name: form.name.trim(),
       account_id: Number(form.account_id),
-      strategy_id: Number(form.strategy_id),
+      strategy_id: isTrader ? null : Number(form.strategy_id),
+      ai_trader: isTrader ? form.ai_trader : null,
       ai_model_id: form.ai_model_id ? Number(form.ai_model_id) : null,
       symbols: form.symbols,
       timeframe: form.timeframe,
       interval_sec: form.interval_sec,
       risk: form.risk,
       copilot: form.copilot,
-      params_override: override,
+      params_override: isTrader ? {} : override,
     }
     const r = await run('save', () => (form.id ? api.updateBot(form.id, body) : api.createBot(body)), '已儲存')
     if (r) {
@@ -212,7 +230,20 @@ export default function Bots() {
   }
 
   const accName = (id: number) => accounts?.find((a) => a.id === id)?.name ?? `#${id}`
-  const selectableStrategies = (strategies ?? []).filter((s) => s.status === 'active' || s.id === form?.strategy_id)
+  const selectableStrategies = (strategies ?? []).filter((s) => !isTraderStrategy(s) && (s.status === 'active' || s.id === form?.strategy_id))
+  const referenceStrategies = (strategies ?? []).filter((s) => s.status === 'active' && s.kind !== 'ai' && s.kind !== 'tradingview')
+  const modelSelect = form && (
+    <select
+      className={`input ${aiRequired && !form.ai_model_id ? 'border-down/70' : ''}`}
+      value={form.ai_model_id}
+      onChange={(e) => setForm({ ...form, ai_model_id: e.target.value ? Number(e.target.value) : '' })}
+    >
+      <option value="">{aiRequired ? '請選擇 AI 模型（必填）' : '不使用 AI'}</option>
+      {models?.map((m) => (
+        <option key={m.id} value={m.id}>{m.name}</option>
+      ))}
+    </select>
+  )
   const pendingCount = (strategies ?? []).filter((s) => s.status !== 'active').length
 
   return (
@@ -228,7 +259,7 @@ export default function Bots() {
       {loading ? (
         <Skeleton />
       ) : !bots?.length ? (
-        <Empty icon={<Icons.bot className="h-5 w-5" />} title="尚未建立 Bot" hint="Bot = 交易所帳戶 + 策略 + 交易對 + 風控 +（選用）AI 副駕駛。" />
+        <Empty icon={<Icons.bot className="h-5 w-5" />} title="尚未建立 Bot" hint="兩種模式：AI 交易員（AI 自主決策，不需要策略）或 你的策略 + AI 審核。" />
       ) : (
         <div className="space-y-2.5">
           {bots.map((b) => {
@@ -250,7 +281,7 @@ export default function Bots() {
                 badges={
                   <>
                     <BotStatusBadge running={b.running} status={b.status} error={b.last_error} />
-                    {(b.copilot_active || (b.ai_model_id && (b.copilot?.review || b.copilot?.manage || b.copilot?.tune))) && <AiBadge />}
+                    <BotAiBadge bot={b} />
                   </>
                 }
                 actions={
@@ -301,10 +332,39 @@ export default function Bots() {
       >
         {form && (
           <div className="space-y-5">
+            {/* 模式 */}
+            <section className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Bot 模式">
+              {([
+                ['ai_trader', 'AI 交易員', '推薦', 'AI 綜合行情、新聞、總經與合約數據，自己決定做多做空、倉位與止損。不需要寫策略。'],
+                ['strategy', '我的策略 + AI 審核', '', '你的策略（內建 / Pine 轉換 / TradingView）決定方向，AI 負責把關、持倉管理與參數微調。'],
+              ] as const).map(([m, title, tag, desc]) => {
+                const on = form.mode === m
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => setForm({ ...form, mode: m })}
+                    className={`rounded-2xl border p-4 text-left transition-colors ${on ? 'border-gold/60 bg-gold/10' : 'border-line bg-panel2/40 hover:border-slate-500'}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`flex h-4 w-4 items-center justify-center rounded-full border ${on ? 'border-gold' : 'border-slate-500'}`}>
+                        {on && <span className="h-2 w-2 rounded-full bg-gold" />}
+                      </span>
+                      <span className={`font-semibold ${on ? 'text-gold' : 'text-slate-100'}`}>{title}</span>
+                      {tag && <span className="badge border-gold/40 bg-gold/10 text-gold">{tag}</span>}
+                    </div>
+                    <p className="mt-1.5 pl-6 text-xs leading-relaxed text-muted">{desc}</p>
+                  </button>
+                )
+              })}
+            </section>
+
             {/* 基本設定 */}
             <section className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <Field label="名稱">
-                <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：BTC 均線 + AI" autoFocus />
+                <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={isTrader ? "例如：AI 交易員 · 主力" : "例如：BTC 均線 + AI 審核"} autoFocus />
               </Field>
               <Field label="交易所帳戶">
                 <select className="input" value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value ? Number(e.target.value) : '' })}>
@@ -317,6 +377,7 @@ export default function Bots() {
                   ))}
                 </select>
               </Field>
+              {!isTrader && (
               <Field label="策略" hint={pendingCount ? `有 ${pendingCount} 個策略待審核，需先審核啟用才能選擇` : undefined}>
                 <select
                   className="input"
@@ -331,6 +392,12 @@ export default function Bots() {
                   ))}
                 </select>
               </Field>
+              )}
+              {isTrader && (
+                <Field label="AI 模型" hint="AI 交易員的大腦；建議使用推理能力強的模型">
+                  {modelSelect}
+                </Field>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <Field label="K 線週期">
                   <select className="input" value={form.timeframe} onChange={(e) => setForm({ ...form, timeframe: e.target.value })}>
@@ -343,38 +410,69 @@ export default function Bots() {
                   <NumInput value={form.interval_sec} step={5} onChange={(v) => setForm({ ...form, interval_sec: v ?? 60 })} />
                 </Field>
               </div>
-              <Field label="交易對（USDT 永續）" className="md:col-span-2">
+              <Field label="交易對（USDT 永續）" className="md:col-span-2" hint={isTrader ? '可放多個幣種，AI 會逐一判斷每個幣種' : undefined}>
                 <SymbolsInput value={form.symbols} onChange={(v) => setForm({ ...form, symbols: v })} />
               </Field>
             </section>
 
-            {/* AI 副駕駛 */}
-            {strat?.kind !== 'tradingview' && (
+            {/* AI 交易員 */}
+            {isTrader && (
+              <section className="space-y-3 rounded-2xl border border-gold/30 bg-gradient-to-b from-gold/[0.06] to-transparent p-4">
+                <div>
+                  <div className="flex items-center gap-2 text-base font-semibold text-gold">
+                    <Icons.sparkle className="h-5 w-5" /> AI 交易員
+                  </div>
+                  <div className="text-xs text-muted">
+                    AI 每根 K 棒收盤時讀取行情、技術指標、新聞、總經、資金費率與恐懼貪婪指數，自主決定開倉、平倉或觀望。所有決策仍須通過風控。
+                  </div>
+                </div>
+                <Field label="交易偏好（用中文描述即可）">
+                  <textarea
+                    className="input min-h-[88px]"
+                    value={form.ai_trader.instructions}
+                    onChange={(e) => setForm({ ...form, ai_trader: { ...form.ai_trader, instructions: e.target.value } })}
+                    placeholder="例如：順勢交易、不逆勢抄底；重大數據前不開倉；最多 3 倍槓桿"
+                  />
+                </Field>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <Field label="參考策略（選填）" hint="AI 會把這個策略的訊號當成參考意見，不會盲從">
+                    <select
+                      className="input"
+                      value={form.ai_trader.reference_strategy_id ?? ''}
+                      onChange={(e) => setForm({ ...form, ai_trader: { ...form.ai_trader, reference_strategy_id: e.target.value ? Number(e.target.value) : null } })}
+                    >
+                      <option value="">不參考策略</option>
+                      {referenceStrategies.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}（{kindLabel(s.kind)}）</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="最低信心" hint="AI 信心低於此值時改為觀望（0～1）">
+                    <NumInput value={form.ai_trader.min_confidence} step={0.05} onChange={(v) => setForm({ ...form, ai_trader: { ...form.ai_trader, min_confidence: v ?? 0.6 } })} />
+                  </Field>
+                </div>
+                <Field label="重大經濟事件避險（分鐘）" hint="CPI、FOMC、非農等公布前後幾分鐘不開新倉；0＝關閉">
+                  <NumInput value={form.copilot.event_blackout_min} step={15} onChange={(v) => setForm({ ...form, copilot: { ...form.copilot, event_blackout_min: v ?? 0 } })} />
+                </Field>
+              </section>
+            )}
+
+            {/* 我的策略 + AI 審核 */}
+            {!isTrader && strat?.kind !== 'tradingview' && (
               <section className="rounded-2xl border border-gold/30 bg-gradient-to-b from-gold/[0.06] to-transparent p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2 text-base font-semibold text-gold">
-                      <Icons.sparkle className="h-5 w-5" /> AI 副駕駛
+                      <Icons.sparkle className="h-5 w-5" /> AI 審核
                     </div>
                     <div className="text-xs text-muted">策略決定方向，AI 負責把關與微調。AI 永遠不能改變方向或放寬止損。</div>
                   </div>
-                  <div className="w-full sm:w-64">
-                    <select
-                      className={`input ${aiRequired && !form.ai_model_id ? 'border-down/70' : ''}`}
-                      value={form.ai_model_id}
-                      onChange={(e) => setForm({ ...form, ai_model_id: e.target.value ? Number(e.target.value) : '' })}
-                    >
-                      <option value="">{aiRequired ? '請選擇 AI 模型（必填）' : '不使用 AI'}</option>
-                      {models?.map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                  </div>
+                  <div className="w-full sm:w-64">{modelSelect}</div>
                 </div>
                 <CopilotForm value={form.copilot} defaults={meta.copilot_defaults} onChange={(c) => setForm({ ...form, copilot: c })} strategyParams={{ ...strategyParams, ...form.params_override }} strategyUsesAi={stratUsesAi} />
               </section>
             )}
-            {strat?.kind === 'tradingview' && (
+            {!isTrader && strat?.kind === 'tradingview' && (
               <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-sky-100">
                 TradingView 訊號策略由 Webhook 觸發，儲存後可在 Bot 清單按「Webhook」取得網址與 Alert 訊息範本。
               </div>
@@ -386,7 +484,7 @@ export default function Bots() {
               <Collapsible title="風控設定" icon={<Icons.shield className="h-4 w-4" />}>
                 <RiskForm value={form.risk} defaults={meta.risk_defaults} onChange={(r) => setForm({ ...form, risk: r })} />
               </Collapsible>
-              {strat && strat.kind !== 'tradingview' && Object.keys(strategyParams).length > 0 && (
+              {!isTrader && strat && strat.kind !== 'tradingview' && Object.keys(strategyParams).length > 0 && (
                 <Collapsible title="策略參數（僅此 Bot）" icon={<Icons.chart className="h-4 w-4" />}>
                   <div className="mb-3 text-xs text-muted">只影響此 Bot，不會修改策略本身；AI 參數微調套用後也會寫在這裡。</div>
                   <ParamsForm defaults={strategyParams} value={{ ...strategyParams, ...form.params_override }} onChange={(p) => setForm({ ...form, params_override: p })} />

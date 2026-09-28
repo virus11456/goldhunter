@@ -77,7 +77,7 @@ export default function Intel() {
           <Skeleton rows={5} />
         ) : (
           <div className="space-y-4">
-            <p className="text-xs leading-relaxed text-muted">AI 副駕駛與 AI 策略做判斷時會讀取以下市場情報。來源失敗時會自動略過，不影響交易。</p>
+            <p className="text-xs leading-relaxed text-muted">AI 交易員與 AI 審核做判斷時會讀取以下市場情報。來源失敗時會自動略過，不影響交易。</p>
             <div className="space-y-2">
               {SOURCES.map((s) => (
                 <div key={s.key} className={`flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 transition-colors ${draft[s.key] ? 'border-gold/30 bg-gold/[0.04]' : 'border-line bg-[#12161b]'}`}>

@@ -125,6 +125,8 @@ class DemoAI(AIProvider):
 
     async def complete_json(self, system, user, schema):
         r = random.random()
+        if "AI 交易員" in system:
+            return self._trader(user)
         if "持倉管理員" in system:
             if r < 0.72:
                 d = {"action": "hold", "reduce_pct": None, "new_stop": None, "confidence": 0.62,
@@ -173,6 +175,42 @@ class DemoAI(AIProvider):
             d = {"ok": True}
         return AIResult(decision=d, raw_text=json.dumps(d, ensure_ascii=False), model=self.model,
                         input_tokens=random.randint(2800, 4200), output_tokens=random.randint(90, 220))
+
+    def _trader(self, user):
+        """模擬 AI 交易員：順勢為主，參考情緒與資金費率；多數時候觀望"""
+        sym = user.split("## 商品")[1].strip().split("（")[0].split(":")[1].split("/")[0]
+        price = float(user.split("最新價 ")[1].split(chr(10))[0])
+        ema50 = float(user.split('"ema50": ')[1].split(",")[0])
+        rsi = float(user.split('"rsi14": ')[1].split(",")[0])
+        pos = user.split("目前持倉：")[1].split(chr(10))[0]
+        r = random.random()
+        above = price > ema50 * 1.003
+        below = price < ema50 * 0.997
+        d = {"action": "hold", "size_pct": 0, "leverage": 1, "stop_loss": None, "take_profit": None,
+             "confidence": 0.5, "reasoning": ""}
+        if pos.startswith("無"):
+            if above and rsi < 68 and r < 0.35:
+                d.update(action="open_long", size_pct=random.choice([8, 10, 12]), leverage=2,
+                         stop_loss=round(price * 0.982, 2), take_profit=round(price * 1.036, 2), confidence=0.74,
+                         reasoning=f"{sym} 站上 EMA50、RSI {rsi:.0f} 未過熱；資金費率中性、ETF 資金持續流入，順勢做多，止損設在前低下方")
+            elif below and rsi > 32 and r < 0.3:
+                d.update(action="open_short", size_pct=random.choice([6, 8]), leverage=2,
+                         stop_loss=round(price * 1.018, 2), take_profit=round(price * 0.964, 2), confidence=0.7,
+                         reasoning=f"{sym} 跌破 EMA50、未平倉量增加但價格走弱，空方主導；恐懼貪婪指數由高檔回落，順勢做空")
+            else:
+                d.update(confidence=0.55, reasoning=random.choice([
+                    f"{sym} 在 EMA50 附近整理、方向不明，Core PCE 將於本週公布，先觀望",
+                    f"{sym} RSI {rsi:.0f} 位於中性區、成交量萎縮，沒有明確優勢，觀望",
+                    f"{sym} 趨勢成立但已連漲多根、追價盈虧比不佳，等回檔再說"]))
+        else:
+            long = pos.startswith("long")
+            if (long and price < ema50) or (not long and price > ema50):
+                d.update(action="close", confidence=0.72,
+                         reasoning=f"{sym} 價格回到 EMA50 另一側，原本的趨勢假設失效，平倉出場")
+            else:
+                d.update(confidence=0.6, reasoning=f"{sym} 趨勢仍在、未觸及止損，續抱持倉")
+        return AIResult(decision=d, raw_text=json.dumps(d, ensure_ascii=False), model=self.model,
+                        input_tokens=random.randint(3600, 5200), output_tokens=random.randint(110, 240))
 
     async def complete_text(self, system, user, max_tokens=16000):
         return PY_CONVERTED
@@ -303,30 +341,30 @@ with TestClient(app) as c:
                               "params": {"fast": 9, "slow": 26, "size_pct": 15, "atr_mult": 2.5, "allow_short": True, "leverage": 2}})
     st_rsi = P("/strategies", {"name": "ETH RSI 回歸", "kind": "rsi_reversion",
                                "params": {"length": 14, "oversold": 38, "exit": 55, "size_pct": 12, "stop_pct": 2.5}})
-    P("/strategies", {"name": "AI 自主判斷", "kind": "ai",
-                      "params": {"instructions": "順勢交易為主，資金費率極端時反向思考；重大數據前不開新倉。盈虧比至少 1:2。",
-                                 "bars": 40, "min_confidence": 0.65}})
     st_tv = P("/strategies", {"name": "TradingView 訊號", "kind": "tradingview"})
     conv = P("/strategies/convert-pine", {"name": "通道突破（Pine 轉換）", "pine": PINE, "ai_model_id": claude["id"]})
     fx["convert_result"] = conv
     tune_ranges = {"fast": [5, 20], "slow": [20, 60]}
-    b1 = P("/bots", {"name": "BTC 趨勢 × AI 副駕駛", "account_id": acc1["id"], "strategy_id": st_ma["id"],
+    b0 = P("/bots", {"name": "AI 交易員 · 主力", "account_id": acc1["id"], "ai_model_id": claude["id"],
+                     "symbols": ["crypto:BTC/USDT:perp", "crypto:ETH/USDT:perp", "crypto:SOL/USDT:perp"],
+                     "timeframe": "1h", "interval_sec": 60, "risk": {"max_leverage": 3, "max_position_pct": 15},
+                     "copilot": {"review": False, "manage": False, "tune": False, "event_blackout_min": 60},
+                     "ai_trader": {"instructions": "順勢交易為主，不逆勢抄底；重大數據公布前不開新倉；單筆最多 15% 資金、最多 3 倍槓桿。",
+                                   "reference_strategy_id": st_ma["id"], "min_confidence": 0.6}})
+    b1 = P("/bots", {"name": "BTC 均線 + AI 審核", "account_id": acc1["id"], "strategy_id": st_ma["id"],
                      "ai_model_id": claude["id"], "symbols": ["crypto:BTC/USDT:perp"], "timeframe": "15m",
                      "interval_sec": 60, "risk": {"max_leverage": 3, "max_position_pct": 25},
                      "copilot": {"review": True, "manage": True, "manage_interval_min": 60, "tune": True,
                                  "tune_ranges": tune_ranges, "event_blackout_min": 60,
                                  "notes": "偏好順勢，不要在重大數據公布前追價；盤整時寧可少做"}})
-    b2 = P("/bots", {"name": "ETH 均值回歸 × DeepSeek", "account_id": acc2["id"], "strategy_id": st_rsi["id"],
-                     "ai_model_id": deepseek["id"], "symbols": ["crypto:ETH/USDT:perp"], "timeframe": "15m",
-                     "interval_sec": 60, "risk": {"max_leverage": 2},
-                     "copilot": {"review": True, "manage": False, "tune": False, "event_blackout_min": 30}})
     b3 = P("/bots", {"name": "SOL TradingView 跟單", "account_id": acc1["id"], "strategy_id": st_tv["id"],
                      "symbols": ["crypto:SOL/USDT:perp"], "timeframe": "15m", "interval_sec": 60,
                      "risk": {"max_leverage": 3}, "copilot": {"review": False, "manage": False, "event_blackout_min": 0}})
-    P("/bots", {"name": "AI 自主交易（實驗中）", "account_id": acc2["id"], "strategy_id": st_ma["id"] + 2,
-                "ai_model_id": claude["id"], "symbols": ["crypto:BTC/USDT:perp", "crypto:ETH/USDT:perp"],
-                "timeframe": "1h", "interval_sec": 300, "risk": {"max_leverage": 2},
-                "copilot": {"review": False, "manage": False, "event_blackout_min": 60}})
+    P("/bots", {"name": "ETH RSI 回歸 + DeepSeek 審核", "account_id": acc2["id"], "strategy_id": st_rsi["id"],
+                "ai_model_id": deepseek["id"], "symbols": ["crypto:ETH/USDT:perp"], "timeframe": "15m",
+                "interval_sec": 60, "risk": {"max_leverage": 2},
+                "copilot": {"review": True, "manage": False, "tune": False, "event_blackout_min": 30}})
+    b2 = b0
 
     for b in (b1, b2, b3):
         P(f"/bots/{b['id']}/start")
@@ -375,7 +413,9 @@ with TestClient(app) as c:
     fx["bots"] = G("/bots")
     fx["dashboard"] = G("/dashboard")
     fx["trades"] = G("/trades?limit=2000")
-    fx["decisions"] = G("/decisions?limit=1000")
+    acted = G("/decisions?limit=1000&hide_hold=true")
+    holds = [d for d in G("/decisions?limit=1000") if d["action"] == "hold"][:150]  # 展示資料只保留最近 150 筆觀望
+    fx["decisions"] = sorted(acted + holds, key=lambda d: d["ts"], reverse=True)
     fx["tuning"] = G("/tuning")
     fx["equity"] = {str(b["id"]): G(f"/equity?bot_id={b['id']}&hours=720") for b in fx["bots"]}
     fx["positions"] = {str(b["id"]): G(f"/bots/{b['id']}/positions") for b in fx["bots"]}

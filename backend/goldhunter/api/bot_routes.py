@@ -233,10 +233,13 @@ def list_trades(bot_id: int | None = None, limit: int = 200, s: Session = Depend
 
 
 @router.get("/decisions")
-def list_decisions(bot_id: int | None = None, limit: int = 100, s: Session = Depends(get_session)):
+def list_decisions(bot_id: int | None = None, limit: int = 100, hide_hold: bool = False,
+                   s: Session = Depends(get_session)):
     q = select(DecisionLog).order_by(col(DecisionLog.ts).desc()).limit(min(limit, 1000))
     if bot_id:
         q = q.where(DecisionLog.bot_id == bot_id)
+    if hide_hold:
+        q = q.where(DecisionLog.action != "hold")
     return list(s.exec(q))
 
 
