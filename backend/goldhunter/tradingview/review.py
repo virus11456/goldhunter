@@ -40,6 +40,7 @@ class ReviewReport(BaseModel):
     reviewed_at: str
     symbol: str
     timeframe: str
+    exchange_id: str = "binance"
     metrics: dict = {}
 
 
@@ -260,7 +261,7 @@ def _tf_delta(timeframe: str) -> timedelta:
 
 
 async def run_review(*, ai: AIProvider, pine: str, code: str, params: dict, inst: Instrument, timeframe: str,
-                     fetch_candles, tv_csv: str | None = None) -> ReviewReport:
+                     fetch_candles, tv_csv: str | None = None, exchange_id: str = "binance") -> ReviewReport:
     """fetch_candles(start: datetime, end: datetime) -> list[Candle]"""
     stages: list[Stage] = []
     safety, cls = stage_safety(code)
@@ -279,7 +280,11 @@ async def run_review(*, ai: AIProvider, pine: str, code: str, params: dict, inst
             smoke = Stage(key="smoke", name="試跑", status="failed", summary="下載歷史資料失敗",
                           details=[f"{type(e).__name__}: {e}"])
         stages.append(smoke)
-        stages.append(await stage_cross_check(ai, pine, code))
+        if pine.strip():
+            stages.append(await stage_cross_check(ai, pine, code))
+        else:
+            stages.append(Stage(key="cross", name="AI 交叉檢查", status="skipped",
+                                summary="沒有 Pine 原始碼（自己寫的 Python 策略），略過比對"))
         if tv_csv:
             try:
                 tv = parse_tv_trades_csv(tv_csv)
@@ -297,7 +302,8 @@ async def run_review(*, ai: AIProvider, pine: str, code: str, params: dict, inst
         else:
             stages.append(Stage(key="tv", name="TradingView 對帳", status="skipped",
                                 summary="未上傳交易清單 CSV（上傳後可確認與 TradingView 結果一致）"))
-    passed = all(s.status == "passed" for s in stages if s.key != "tv") and all(
+    required = {"safety", "smoke"} | ({"cross"} if pine.strip() else set())
+    passed = all(s.status == "passed" for s in stages if s.key in required) and all(
         s.status != "failed" for s in stages)
     return ReviewReport(passed=passed, stages=stages, reviewed_at=now.isoformat(), symbol=str(inst),
-                        timeframe=timeframe, metrics=metrics)
+                        timeframe=timeframe, exchange_id=exchange_id, metrics=metrics)

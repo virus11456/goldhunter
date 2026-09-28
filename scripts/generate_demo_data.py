@@ -169,6 +169,14 @@ class DemoAI(AIProvider):
             else:
                 d = {"verdict": "approve", "size_multiplier": 1, "stop_loss": None, "take_profit": None,
                      "confidence": 0.81, "reasoning": random.choice(APPROVE)}
+        elif "程式碼審查員" in system:
+            if "背離" in user:
+                d = {"equivalent": False, "confidence": 0.83, "summary": "背離判斷邏輯未完整轉換",
+                     "issues": [{"severity": "high", "description": "Pine 用 ta.pivotlow 找前低做 RSI 背離，Python 只比較最近兩根 K 棒，進場時機會不同"},
+                                {"severity": "medium", "description": "strategy.exit 的 trail_points 移動止損沒有轉換"}]}
+            else:
+                d = {"equivalent": True, "confidence": 0.93, "summary": "進出場條件、ATR 止損與參數預設值皆一致",
+                     "issues": [{"severity": "low", "description": "plot() 繪製通道線未轉換，不影響交易"}]}
         elif "策略研究員" in system:
             d = {"params": {"fast": 12, "slow": 34}, "reasoning": "近兩週由單邊上漲轉為區間震盪，縮短均線週期提高反應速度，避免在盤整中頻繁假突破"}
         else:
@@ -280,6 +288,34 @@ async def fetch_history(exchange_id, inst, tf, s, e):
 
 
 backtest_routes.fetch_history = fetch_history
+settings_routes.fetch_history = fetch_history
+settings_routes.datetime = SimDT  # 審查通過時間用模擬時鐘，模擬期進度才會正確
+
+
+async def tv_csv_for(code_md: str) -> str:
+    """模擬使用者從 TradingView 匯出的交易清單（時間為台灣時區 UTC+8）"""
+    from goldhunter.backtest.engine import BacktestConfig, run_backtest
+    from goldhunter.core.models import Instrument
+    from goldhunter.risk.manager import RiskConfig
+    from goldhunter.strategies.custom import load_strategy_class
+    from goldhunter.tradingview.pine_converter import extract_code
+
+    cls = load_strategy_class(extract_code(code_md))
+    inst = Instrument.parse("crypto:BTC/USDT:perp")
+    candles = await fetch_history("binance", inst, "1h", 0, 0)
+    res = await run_backtest(cls(cls.default_params), inst, "1h", candles,
+                             BacktestConfig(risk=RiskConfig(daily_loss_limit_pct=0, max_orders_per_hour=10_000,
+                                                            max_position_pct=100, max_total_exposure_pct=1000,
+                                                            require_stop_loss=False)))
+    rows, n = ["Trade #,Type,Signal,Date/Time,Price USDT,Contracts,Profit USDT"], 0
+    for t in res.trades:
+        ts = datetime.fromtimestamp(t.ts / 1000, tz=UTC) + timedelta(hours=8)
+        if not t.reduce_only:
+            n += 1
+            rows.append(f"{n},Entry Long,L,{ts:%Y-%m-%d %H:%M},{t.price:.2f},1,0")
+        else:
+            rows.append(f"{n},Exit Long,XL,{ts:%Y-%m-%d %H:%M},{t.price:.2f},1,{t.realized_pnl or 0:.2f}")
+    return "\n".join(rows)
 
 # 市場情報：恐懼貪婪 / 新聞 / 經濟日曆用即時資料（取不到就用備用），合約數據用示意值
 INTEL = {}
@@ -342,8 +378,13 @@ with TestClient(app) as c:
     st_rsi = P("/strategies", {"name": "ETH RSI 回歸", "kind": "rsi_reversion",
                                "params": {"length": 14, "oversold": 38, "exit": 55, "size_pct": 12, "stop_pct": 2.5}})
     st_tv = P("/strategies", {"name": "TradingView 訊號", "kind": "tradingview"})
-    conv = P("/strategies/convert-pine", {"name": "通道突破（Pine 轉換）", "pine": PINE, "ai_model_id": claude["id"]})
+    tv_csv = c.portal.call(tv_csv_for, PY_CONVERTED)
+    conv = P("/strategies/convert-pine", {"name": "通道突破（Pine 轉換）", "pine": PINE, "ai_model_id": claude["id"],
+                                          "symbol": "crypto:BTC/USDT:perp", "timeframe": "1h", "tv_csv": tv_csv})
     fx["convert_result"] = conv
+    fx["convert_failed"] = P("/strategies/convert-pine", {
+        "name": "RSI 背離（Pine 轉換）", "ai_model_id": claude["id"],
+        "pine": "//@version=5\nstrategy(\"RSI 背離\")\nr = ta.rsi(close, 14)\npl = ta.pivotlow(r, 5, 5)\n// ...背離判斷..."})
     tune_ranges = {"fast": [5, 20], "slow": [20, 60]}
     b0 = P("/bots", {"name": "AI 交易員 · 主力", "account_id": acc1["id"], "ai_model_id": claude["id"],
                      "symbols": ["crypto:BTC/USDT:perp", "crypto:ETH/USDT:perp", "crypto:SOL/USDT:perp"],
@@ -400,6 +441,8 @@ with TestClient(app) as c:
                               "timeframe": "1h", "start": "2026-06-01T00:00:00Z", "end": "2026-09-28T00:00:00Z",
                               "initial_cash": 10000})
     P("/backtests", {"strategy_id": conv["strategy"]["id"], "exchange_id": "binance", "symbol": "crypto:ETH/USDT:perp",
+                     "timeframe": "1h", "start": "2026-06-01T00:00:00Z", "end": "2026-09-28T00:00:00Z", "initial_cash": 10000})
+    P("/backtests", {"strategy_id": st_rsi["id"], "exchange_id": "binance", "symbol": "crypto:ETH/USDT:perp",
                      "timeframe": "1h", "start": "2026-06-01T00:00:00Z", "end": "2026-09-28T00:00:00Z", "initial_cash": 10000})
     bt_main = P("/backtests", {"strategy_id": st_ma["id"], "exchange_id": "binance", "symbol": "crypto:BTC/USDT:perp",
                                "timeframe": "4h", "start": "2026-03-01T00:00:00Z", "end": "2026-09-28T00:00:00Z",

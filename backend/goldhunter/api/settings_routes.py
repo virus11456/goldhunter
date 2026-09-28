@@ -242,7 +242,7 @@ def create_strategy(body: StrategyIn, s: Session = Depends(get_session)):
     s.add(st)
     s.commit()
     s.refresh(st)
-    return strategy_out(st)
+    return strategy_out(st, s)
 
 
 @router.put("/strategies/{sid}")
@@ -255,7 +255,7 @@ def update_strategy(sid: int, body: StrategyIn, s: Session = Depends(get_session
     s.add(st)
     s.commit()
     s.refresh(st)
-    return strategy_out(st)
+    return strategy_out(st, s)
 
 
 @router.delete("/strategies/{sid}")
@@ -331,7 +331,8 @@ async def _review_and_save(st: StrategyConfig, ai, body: ReviewSettings, s: Sess
                                    int(end.timestamp() * 1000))
 
     report = await run_review(ai=ai, pine=st.pine_source or "", code=st.code or "", params=st.params or {},
-                              inst=inst, timeframe=body.timeframe, fetch_candles=candles, tv_csv=body.tv_csv)
+                              inst=inst, timeframe=body.timeframe, fetch_candles=candles, tv_csv=body.tv_csv,
+                              exchange_id=body.exchange_id)
     st.review = report.model_dump()
     if report.metrics:
         st.metrics = {**report.metrics, "symbol": body.symbol, "timeframe": body.timeframe, "source": "review"}

@@ -130,3 +130,10 @@ async def test_backtest_metrics_complete(candles):
               "calmar", "payoff_ratio", "expectancy", "max_consecutive_losses", "avg_hold_hours", "exposure_pct"):
         assert k in r.metrics, k
     assert 0 < r.metrics["exposure_pct"] <= 100
+
+
+async def test_review_handwritten_python_skips_cross_check():
+    rep = await run_review(ai=FakeAI([]), pine="", code=CODE, params={}, inst=BTC_PERP, timeframe="1h",
+                           fetch_candles=candles_fetcher(make_candles(600, period=40, amp=15)), exchange_id="okx")
+    cross = next(s for s in rep.stages if s.key == "cross")
+    assert rep.passed and cross.status == "skipped" and rep.exchange_id == "okx"

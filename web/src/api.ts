@@ -252,6 +252,7 @@ export interface ReviewReport {
   reviewed_at: string
   symbol: string
   timeframe: string
+  exchange_id?: string
   metrics: StrategyMetrics
 }
 

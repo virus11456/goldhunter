@@ -167,15 +167,40 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
       return errors.length ? { ok: false, errors } : { ok: true, errors: [], name: 'user_strategy', default_params: {}, uses_ai: false }
     }
     if (seg[1] === 'convert-pine') {
-      await wait(1500)
-      const res = clone(db.convert_result)
-      res.strategy = { ...res.strategy, id: nextId++, name: body.name, pine_source: body.pine, created_at: now() }
+      await wait(2500)
+      // 展示：Pine 內容含「背離」時示範審查未通過，其餘示範通過
+      const res = clone(String(body.pine).includes('背離') ? db.convert_failed : db.convert_result)
+      if (res.review && !body.tv_csv) {
+        const tv = res.review.stages.find((x: Json) => x.key === 'tv')
+        if (tv) Object.assign(tv, { status: 'skipped', summary: '未上傳交易清單 CSV（上傳後可確認與 TradingView 結果一致）', details: [] })
+      }
+      res.strategy = { ...res.strategy, id: nextId++, name: body.name, pine_source: body.pine, created_at: now(),
+        review: res.review, approved_at: res.review?.passed ? now() : null,
+        paper_progress: res.review?.passed ? { days: 0, days_required: 7, trades: 0, trades_required: 3, ready: false } : null }
       db.strategies.push(res.strategy)
       return res
     }
+    if (seg[2] === 'review' || seg[2] === 'fix') {
+      await wait(2000)
+      const st = find(db.strategies)
+      const review = clone(db.convert_result.review)
+      if (!body.tv_csv) {
+        const tv = review.stages.find((x: Json) => x.key === 'tv')
+        if (tv) Object.assign(tv, { status: 'skipped', summary: '未上傳交易清單 CSV（上傳後可確認與 TradingView 結果一致）', details: [] })
+      }
+      Object.assign(st, { review, status: 'paper_only', status_label: '模擬期', approved_at: now(),
+        paper_progress: { days: 0, days_required: 7, trades: 0, trades_required: 3, ready: false } })
+      if (seg[2] === 'fix') st.code = db.convert_result.strategy.code
+      return { strategy: st, review, conversion: seg[2] === 'fix' ? db.convert_result.conversion : undefined }
+    }
+    if (seg[2] === 'promote') {
+      const st = find(db.strategies)
+      Object.assign(st, { status: 'active', status_label: '已啟用', paper_progress: null })
+      return st
+    }
     if (seg[2] === 'activate') {
       const st = find(db.strategies)
-      st.status = 'active'
+      Object.assign(st, { status: 'active', status_label: '已啟用', paper_progress: null })
       return st
     }
     if (method === 'POST') {
