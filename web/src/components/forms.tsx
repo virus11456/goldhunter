@@ -132,7 +132,7 @@ export function NumInput({
       onChange={(e) => {
         const t = e.target.value
         setText(t)
-        if (t === '') onChange(nullable ? null : null)
+        if (t === '') onChange(null)
         else if (!Number.isNaN(Number(t))) onChange(Number(t))
       }}
     />
