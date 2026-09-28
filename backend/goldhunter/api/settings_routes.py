@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 
 from goldhunter.ai.base import AIProviderError
 from goldhunter.ai.registry import available_providers
+from goldhunter.copilot.config import CopilotConfig
 from goldhunter.core.secrets import decrypt, encrypt, mask
 from goldhunter.engine.manager import exchange_from_account, provider_from_config
 from goldhunter.exchanges.registry import available_exchanges
@@ -32,6 +33,7 @@ def meta():
         "strategy_types": list_strategy_types(),
         "timeframes": TIMEFRAMES,
         "risk_defaults": RiskConfig().model_dump(),
+        "copilot_defaults": CopilotConfig().model_dump(),
         "strategy_template": TEMPLATE,
     }
 
@@ -82,6 +84,10 @@ def create_account(body: AccountIn, s: Session = Depends(get_session)):
 @router.put("/accounts/{acc_id}")
 def update_account(acc_id: int, body: AccountIn, s: Session = Depends(get_session)):
     a = s.get(ExchangeAccount, acc_id) or _404()
+    if body.exchange_id not in {e["id"] for e in available_exchanges() if not e.get("planned")}:
+        raise HTTPException(400, "尚未支援此交易所")
+    if not body.paper and not ((body.api_key or a.api_key_enc) and (body.secret or a.secret_enc)):
+        raise HTTPException(400, "實盤帳戶需要 API Key 與 Secret")
     a.name, a.exchange_id, a.testnet, a.paper, a.paper_cash = (
         body.name, body.exchange_id, body.testnet, body.paper, body.paper_cash)
     if body.api_key:
@@ -92,6 +98,7 @@ def update_account(acc_id: int, body: AccountIn, s: Session = Depends(get_sessio
         a.passphrase_enc = encrypt(body.passphrase)
     s.add(a)
     s.commit()
+    s.refresh(a)
     return account_out(a)
 
 
@@ -108,14 +115,16 @@ def delete_account(acc_id: int, s: Session = Depends(get_session)):
 @router.post("/accounts/{acc_id}/test")
 async def test_account(acc_id: int, s: Session = Depends(get_session)):
     a = s.get(ExchangeAccount, acc_id) or _404()
-    ex = exchange_from_account(a)
+    ex = None
     try:
+        ex = exchange_from_account(a)
         bal = await ex.fetch_balance()
         return {"ok": True, "balance": bal.model_dump()}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     finally:
-        await ex.close()
+        if ex:
+            await ex.close()
 
 
 # ------------------------------ AI 模型 ------------------------------
@@ -159,6 +168,7 @@ def update_ai(mid: int, body: AIModelIn, s: Session = Depends(get_session)):
         m.api_key_enc = encrypt(body.api_key)
     s.add(m)
     s.commit()
+    s.refresh(m)
     return ai_out(m)
 
 
@@ -232,6 +242,7 @@ def update_strategy(sid: int, body: StrategyIn, s: Session = Depends(get_session
     st.name, st.kind, st.params, st.code = body.name, body.kind, body.params, body.code
     s.add(st)
     s.commit()
+    s.refresh(st)
     return strategy_out(st)
 
 
@@ -256,6 +267,7 @@ def activate_strategy(sid: int, s: Session = Depends(get_session)):
     st.status = "active"
     s.add(st)
     s.commit()
+    s.refresh(st)
     return strategy_out(st)
 
 
@@ -269,7 +281,8 @@ def validate_strategy(body: CodeIn):
     if not errors:
         try:
             cls = load_strategy_class(body.code)
-            return {"ok": True, "errors": [], "name": cls.name, "default_params": cls.default_params}
+            return {"ok": True, "errors": [], "name": cls.name, "default_params": cls.default_params,
+                    "uses_ai": cls.uses_ai}
         except Exception as e:
             errors = [f"{type(e).__name__}: {e}"]
     return {"ok": False, "errors": errors}

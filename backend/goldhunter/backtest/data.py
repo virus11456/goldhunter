@@ -5,6 +5,7 @@ from __future__ import annotations
 import ccxt.async_support as ccxt
 
 from goldhunter.core.models import Candle, Instrument
+from goldhunter.exchanges.ccxt_adapter import exchange_symbol
 
 MAX_BARS = 20_000
 
@@ -18,7 +19,7 @@ async def fetch_history(exchange_id: str, instrument: Instrument, timeframe: str
         out: list[Candle] = []
         since = start_ms
         while since < end_ms and len(out) < MAX_BARS:
-            rows = await client.fetch_ohlcv(instrument.ccxt_symbol, timeframe, since=since, limit=1000)
+            rows = await client.fetch_ohlcv(exchange_symbol(exchange_id, instrument), timeframe, since=since, limit=1000)
             if not rows:
                 break
             for r in rows:

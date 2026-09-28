@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from goldhunter.ai.base import AIProvider
 from goldhunter.ai.registry import build_provider
+from goldhunter.copilot.config import CopilotConfig
 from goldhunter.core.models import Instrument
 from goldhunter.core.secrets import decrypt
 from goldhunter.engine.bot import BotRunner
@@ -50,7 +51,8 @@ class BotManager:
             ai = provider_from_config(ai_cfg)
         strategy = None
         if strat_cfg.kind != "tradingview":
-            strategy = build_strategy(strat_cfg.kind, strat_cfg.params, strat_cfg.code, ai=ai)
+            params = {**(strat_cfg.params or {}), **(bot.params_override or {})}
+            strategy = build_strategy(strat_cfg.kind, params, strat_cfg.code, ai=ai)
             if strategy.uses_ai and ai is None:
                 raise ValueError("此策略需要 AI 模型，請在 Bot 設定中選擇")
         if not bot.symbols:
@@ -59,6 +61,7 @@ class BotManager:
             bot_id=bot.id, name=bot.name, exchange=exchange_from_account(acc), strategy=strategy,  # type: ignore[arg-type]
             instruments=[Instrument.parse(s) for s in bot.symbols], timeframe=bot.timeframe,
             interval_sec=bot.interval_sec, risk=RiskConfig(**(bot.risk or {})), ai=ai,
+            copilot=CopilotConfig(**(bot.copilot or {})), exchange_id=acc.exchange_id, strategy_id=strat_cfg.id,
         )
 
     async def start(self, bot_id: int) -> BotRunner:

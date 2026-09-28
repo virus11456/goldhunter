@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, col, func, select
 
+from goldhunter.copilot.config import CopilotConfig
 from goldhunter.core.models import Action, Decision, Instrument
 from goldhunter.engine.manager import manager
 from goldhunter.risk.manager import RiskConfig
-from goldhunter.store.db import Bot, DecisionLog, EquitySnapshot, StrategyConfig, Trade, get_session
+from goldhunter.store.db import Bot, DecisionLog, EquitySnapshot, StrategyConfig, Trade, TuningRun, get_session
 
 router = APIRouter()
 
@@ -26,6 +27,8 @@ class BotIn(BaseModel):
     timeframe: str = "15m"
     interval_sec: int = 60
     risk: dict[str, Any] = {}
+    copilot: dict[str, Any] = {}
+    params_override: dict[str, Any] = {}
 
 
 def bot_out(b: Bot, s: Session) -> dict:
@@ -35,13 +38,16 @@ def bot_out(b: Bot, s: Session) -> dict:
     d["strategy_name"] = strat.name if strat else None
     d["strategy_kind"] = strat.kind if strat else None
     d["running"] = bool(runner and runner.running)
+    d["copilot"] = CopilotConfig(**(b.copilot or {})).model_dump()
+    d["copilot_active"] = bool(runner and runner.copilot_active)
+    d["halted_reason"] = runner.risk_state.halted_reason if runner else None
     if runner:
         d["last_error"] = runner.last_error or b.last_error
-        d["last_run_at"] = runner.last_run_at
-        d["halted_reason"] = runner.risk_state.halted_reason
+        d["last_run_at"] = runner.last_run_at or b.last_run_at
     eq = s.exec(select(EquitySnapshot).where(EquitySnapshot.bot_id == b.id)
                 .order_by(col(EquitySnapshot.ts).desc())).first()
     d["equity"] = eq.equity if eq else None
+    d["baseline_equity"] = eq.baseline_equity if eq else None
     return d
 
 
@@ -50,6 +56,7 @@ def _validate(body: BotIn) -> None:
         for sym in body.symbols:
             Instrument.parse(sym)
         RiskConfig(**body.risk)
+        CopilotConfig(**body.copilot)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     if not body.symbols:
@@ -64,7 +71,8 @@ def list_bots(s: Session = Depends(get_session)):
 @router.post("/bots")
 def create_bot(body: BotIn, s: Session = Depends(get_session)):
     _validate(body)
-    b = Bot(**body.model_dump(), risk=RiskConfig(**body.risk).model_dump())
+    b = Bot(**body.model_dump(exclude={"risk", "copilot"}), risk=RiskConfig(**body.risk).model_dump(),
+            copilot=CopilotConfig(**body.copilot).model_dump())
     s.add(b)
     s.commit()
     s.refresh(b)
@@ -80,8 +88,10 @@ def update_bot(bot_id: int, body: BotIn, s: Session = Depends(get_session)):
     for k, v in body.model_dump().items():
         setattr(b, k, v)
     b.risk = RiskConfig(**body.risk).model_dump()
+    b.copilot = CopilotConfig(**body.copilot).model_dump()
     s.add(b)
     s.commit()
+    s.refresh(b)
     return bot_out(b, s)
 
 
@@ -89,6 +99,9 @@ def update_bot(bot_id: int, body: BotIn, s: Session = Depends(get_session)):
 async def delete_bot(bot_id: int, s: Session = Depends(get_session)):
     b = s.get(Bot, bot_id) or _404()
     await manager.stop(bot_id)
+    for model in (Trade, DecisionLog, EquitySnapshot, TuningRun):
+        for row in s.exec(select(model).where(model.bot_id == bot_id)):
+            s.delete(row)
     s.delete(b)
     s.commit()
     return {"ok": True}
@@ -186,17 +199,17 @@ def list_decisions(bot_id: int | None = None, limit: int = 100, s: Session = Dep
 
 @router.get("/equity")
 def equity_curve(bot_id: int, hours: int = 168, s: Session = Depends(get_session)):
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now(UTC) - timedelta(hours=hours)
     rows = s.exec(select(EquitySnapshot).where(EquitySnapshot.bot_id == bot_id, EquitySnapshot.ts >= since)
                   .order_by(col(EquitySnapshot.ts))).all()
     step = max(1, len(rows) // 500)  # 最多回傳約 500 點
-    return [{"ts": r.ts, "equity": r.equity} for r in rows[::step]]
+    return [{"ts": r.ts, "equity": r.equity, "baseline_equity": r.baseline_equity} for r in rows[::step]]
 
 
 @router.get("/dashboard")
 def dashboard(s: Session = Depends(get_session)):
     bots = [bot_out(b, s) for b in s.exec(select(Bot))]
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     realized_today = s.exec(select(func.coalesce(func.sum(Trade.realized_pnl), 0.0)).where(Trade.ts >= today)).one()
     trades_today = s.exec(select(func.count()).select_from(Trade).where(Trade.ts >= today)).one()
     return {
@@ -207,6 +220,47 @@ def dashboard(s: Session = Depends(get_session)):
         "trades_today": trades_today,
         "bots": bots,
     }
+
+
+# ------------------------------ AI 參數微調 ------------------------------
+@router.get("/tuning")
+def list_tuning(bot_id: int | None = None, s: Session = Depends(get_session)):
+    q = select(TuningRun).order_by(col(TuningRun.ts).desc()).limit(50)
+    if bot_id:
+        q = q.where(TuningRun.bot_id == bot_id)
+    return list(s.exec(q))
+
+
+@router.post("/bots/{bot_id}/tune-now")
+async def tune_now(bot_id: int):
+    runner = manager.runners.get(bot_id)
+    if not runner or not runner.running:
+        raise HTTPException(400, "Bot 未啟動")
+    if not (runner.ai and runner.strategy and not runner.strategy.uses_ai):
+        raise HTTPException(400, "需要規則型 / 自訂策略並設定 AI 模型")
+    return await runner.run_tune()
+
+
+@router.post("/tuning/{run_id}/apply")
+def apply_tuning(run_id: int, s: Session = Depends(get_session)):
+    run = s.get(TuningRun, run_id) or _404()
+    if run.status not in ("proposed", "rejected"):
+        raise HTTPException(400, f"此建議狀態為 {run.status}，無法套用")
+    runner = manager.runners.get(run.bot_id)
+    if runner and runner.strategy:
+        runner.apply_params(run.proposed_params)
+    else:
+        bot = s.get(Bot, run.bot_id) or _404("Bot 不存在")
+        st = s.get(StrategyConfig, bot.strategy_id)
+        base = dict(st.params or {}) if st else {}
+        merged = {**base, **(bot.params_override or {}), **run.proposed_params}
+        bot.params_override = {k: v for k, v in merged.items() if base.get(k) != v}
+        s.add(bot)
+    run.status = "applied"
+    s.add(run)
+    s.commit()
+    s.refresh(run)
+    return run
 
 
 def _404(msg: str = "找不到資料"):

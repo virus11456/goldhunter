@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import JSON, Column, Text
@@ -14,7 +14,7 @@ from goldhunter.config import get_settings
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(UTC)
 
 
 class ExchangeAccount(SQLModel, table=True):
@@ -63,6 +63,10 @@ class Bot(SQLModel, table=True):
     timeframe: str = "15m"
     interval_sec: int = 60
     risk: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # AI 副駕駛設定（訊號審核 / 持倉管理 / 參數微調），見 copilot.config.CopilotConfig
+    copilot: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # 此 Bot 專屬的策略參數覆寫（AI 參數微調套用在這裡，不影響其他 Bot）
+    params_override: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     status: str = "stopped"  # stopped / running / error
     # TradingView Webhook 驗證密語（每個 Bot 各自一組）
     webhook_secret: str = Field(default_factory=lambda: secrets.token_urlsafe(16))
@@ -112,6 +116,28 @@ class EquitySnapshot(SQLModel, table=True):
     bot_id: int = Field(index=True)
     ts: datetime = Field(default_factory=_now, index=True)
     equity: float
+    # 對照組：同一策略「不經 AI 副駕駛」的模擬權益，用來比較 AI 有沒有幫上忙
+    baseline_equity: float | None = None
+
+
+class TuningRun(SQLModel, table=True):
+    """AI 參數微調紀錄"""
+
+    id: int | None = Field(default=None, primary_key=True)
+    bot_id: int = Field(index=True)
+    ts: datetime = Field(default_factory=_now, index=True)
+    current_params: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    proposed_params: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    current_metrics: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    proposed_metrics: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    reasoning: str = Field(default="", sa_column=Column(Text))
+    status: str = "proposed"  # proposed / applied / rejected / failed
+    note: str | None = None
+
+
+class AppSetting(SQLModel, table=True):
+    key: str = Field(primary_key=True)
+    value: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
 class BacktestRun(SQLModel, table=True):

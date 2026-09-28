@@ -86,6 +86,11 @@ def evaluate(
     if decision.action == Action.CLOSE:
         if not close_order:
             return RiskResult(approved=False, reasons=["沒有持倉可平"])
+        if decision.close_pct < 100:
+            qty = round_qty(inst, abs(cur) * decision.close_pct / 100)
+            if qty <= 0:
+                return RiskResult(approved=False, reasons=["減倉數量低於最小下單單位"])
+            close_order.quantity = qty
         return RiskResult(approved=True, orders=[close_order], adjusted=decision)
 
     # ---------- 以下為開倉檢查 ----------

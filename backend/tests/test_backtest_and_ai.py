@@ -125,3 +125,10 @@ async def test_anthropic_provider_request_shape():
     assert body["fallbacks"] == "default"
     assert "server-side-fallback-2026-07-01" in captured["headers"]["anthropic-beta"]
     assert body["stream"] is True
+
+
+def test_hyperliquid_symbol_mapping():
+    from goldhunter.exchanges.ccxt_adapter import exchange_symbol
+
+    assert exchange_symbol("hyperliquid", BTC_PERP) == "BTC/USDC:USDC"
+    assert exchange_symbol("binance", BTC_PERP) == "BTC/USDT:USDT"

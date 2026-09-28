@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
 
@@ -109,7 +109,7 @@ class Order(BaseModel):
     avg_price: float | None = None
     status: OrderStatus
     fee: float = 0.0
-    ts: datetime = Field(default_factory=datetime.utcnow)
+    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
     raw: dict | None = None
 
 
@@ -151,6 +151,7 @@ class Decision(BaseModel):
     instrument: Instrument
     action: Action
     size_pct: float = Field(default=0.0, ge=0, le=100, description="佔帳戶權益百分比")
+    close_pct: float = Field(default=100.0, gt=0, le=100, description="action=close 時平掉持倉的百分比")
     leverage: int = Field(default=1, ge=1, le=125)
     stop_loss: float | None = None
     take_profit: float | None = None

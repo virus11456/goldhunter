@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from goldhunter.api import backtest_routes, bot_routes, settings_routes, tradingview_routes
+from goldhunter.api import backtest_routes, bot_routes, intel_routes, settings_routes, tradingview_routes
 from goldhunter.api.deps import require_token
 from goldhunter.config import get_settings
 from goldhunter.core.secrets import api_token
@@ -47,6 +47,7 @@ auth = [Depends(require_token)]
 app.include_router(settings_routes.router, prefix="/api", dependencies=auth, tags=["settings"])
 app.include_router(bot_routes.router, prefix="/api", dependencies=auth, tags=["bots"])
 app.include_router(backtest_routes.router, prefix="/api", dependencies=auth, tags=["backtest"])
+app.include_router(intel_routes.router, prefix="/api", dependencies=auth, tags=["intel"])
 app.include_router(tradingview_routes.router, prefix="/api", tags=["tradingview"])
 
 

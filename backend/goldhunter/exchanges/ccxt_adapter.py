@@ -27,6 +27,14 @@ SUPPORTED = {
     "hyperliquid": {"label": "Hyperliquid", "needs_passphrase": False, "max_leverage": 50},
 }
 
+def exchange_symbol(exchange_id: str, instrument: Instrument) -> str:
+    """統一用 USDT 報價；Hyperliquid 永續實際以 USDC 報價，自動轉換"""
+    sym = instrument.ccxt_symbol
+    if exchange_id == "hyperliquid":
+        sym = sym.replace("/USDT:USDT", "/USDC:USDC")
+    return sym
+
+
 _STATUS = {"open": OrderStatus.OPEN, "closed": OrderStatus.FILLED, "canceled": OrderStatus.CANCELED}
 
 
@@ -62,24 +70,24 @@ class CCXTExchange(ExchangeAdapter):
     def capabilities(self, instrument: Instrument) -> Capabilities:
         info = SUPPORTED[self.id]
         caps = Capabilities(supports_short=True, max_leverage=info["max_leverage"])
-        if self._markets_loaded and (m := self.client.markets.get(instrument.ccxt_symbol)):
+        if self._markets_loaded and (m := self.client.markets.get(exchange_symbol(self.id, instrument))):
             caps.min_qty = (m.get("limits", {}).get("amount", {}) or {}).get("min") or 0.0
             caps.taker_fee = m.get("taker") or caps.taker_fee
         return caps
 
     def round_qty(self, instrument: Instrument, qty: float) -> float:
-        if self._markets_loaded and instrument.ccxt_symbol in self.client.markets:
-            qty = float(self.client.amount_to_precision(instrument.ccxt_symbol, qty))
+        if self._markets_loaded and exchange_symbol(self.id, instrument) in self.client.markets:
+            qty = float(self.client.amount_to_precision(exchange_symbol(self.id, instrument), qty))
         return super().round_qty(instrument, qty)
 
     async def fetch_candles(self, instrument: Instrument, timeframe: str, limit: int = 200) -> list[Candle]:
         await self._ensure_markets()
-        rows = await self.client.fetch_ohlcv(instrument.ccxt_symbol, timeframe, limit=limit)
+        rows = await self.client.fetch_ohlcv(exchange_symbol(self.id, instrument), timeframe, limit=limit)
         return [Candle(ts=r[0], open=r[1], high=r[2], low=r[3], close=r[4], volume=r[5] or 0) for r in rows]
 
     async def fetch_price(self, instrument: Instrument) -> float:
         await self._ensure_markets()
-        t = await self.client.fetch_ticker(instrument.ccxt_symbol)
+        t = await self.client.fetch_ticker(exchange_symbol(self.id, instrument))
         return float(t["last"])
 
     async def fetch_balance(self) -> Balance:
@@ -97,7 +105,7 @@ class CCXTExchange(ExchangeAdapter):
                 if not contracts:
                     continue
                 size = contracts * float(p.get("contractSize") or 1)
-                sym = p["symbol"].split(":")[0]
+                sym = p["symbol"].split(":")[0].replace("/USDC", "/USDT")
                 out.append(
                     Position(
                         instrument=Instrument(market=Market.CRYPTO, symbol=sym, type=InstrumentType.PERP),
@@ -111,7 +119,7 @@ class CCXTExchange(ExchangeAdapter):
 
     async def place_order(self, req: OrderRequest) -> Order:
         await self._ensure_markets()
-        sym = req.instrument.ccxt_symbol
+        sym = exchange_symbol(self.id, req.instrument)
         params: dict = {}
         if req.leverage and self.client.has.get("setLeverage"):
             try:
@@ -138,7 +146,7 @@ class CCXTExchange(ExchangeAdapter):
         )
 
     async def cancel_order(self, order_id: str, instrument: Instrument) -> None:
-        await self.client.cancel_order(order_id, instrument.ccxt_symbol)
+        await self.client.cancel_order(order_id, exchange_symbol(self.id, instrument))
 
     async def close(self) -> None:
         await self.client.close()
