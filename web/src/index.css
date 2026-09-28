@@ -1,0 +1,194 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg text-slate-200 font-sans antialiased;
+    font-size: 14px;
+  }
+  ::selection {
+    background: rgba(240, 185, 11, 0.35);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2f3640 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #2f3640;
+    border-radius: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  .card {
+    @apply rounded-xl border border-line bg-panel shadow-[0_1px_0_rgba(255,255,255,0.03)_inset,0_8px_24px_-12px_rgba(0,0,0,0.6)];
+  }
+  .card-header {
+    @apply flex items-center justify-between gap-3 border-b border-line px-4 py-3;
+  }
+  .card-title {
+    @apply text-sm font-semibold tracking-wide text-slate-100;
+  }
+  .card-body {
+    @apply p-4;
+  }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-sm font-medium transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/60 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-xs;
+  }
+  .btn-primary {
+    @apply border-gold/70 bg-gold text-black font-semibold shadow-[0_4px_14px_-6px_rgba(240,185,11,0.6)] hover:brightness-110 active:brightness-95;
+  }
+  .btn-secondary {
+    @apply border-line bg-panel2 text-slate-200 hover:border-slate-500/60 hover:bg-[#262c34];
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-muted hover:bg-panel2 hover:text-slate-100;
+  }
+  .btn-danger {
+    @apply border-down/50 bg-down/10 text-red-300 hover:bg-down/20 hover:text-red-200;
+  }
+  .btn-success {
+    @apply border-up/50 bg-up/10 text-green-300 hover:bg-up/20;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-line bg-[#0f1216] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 transition-colors focus:border-gold/70 focus:outline-none focus:ring-2 focus:ring-gold/20 disabled:opacity-60;
+  }
+  select.input {
+    @apply cursor-pointer appearance-none bg-no-repeat pr-8;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%238391a7'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+    background-position: right 0.5rem center;
+    background-size: 1.1rem;
+  }
+  textarea.input {
+    @apply leading-relaxed;
+  }
+  .code-area {
+    @apply input font-mono text-[12.5px] leading-5;
+    tab-size: 4;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium text-muted;
+  }
+  .hint {
+    @apply mt-1 text-xs text-slate-500;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4;
+  }
+  .badge-green {
+    @apply border-up/30 bg-up/10 text-green-300;
+  }
+  .badge-red {
+    @apply border-down/30 bg-down/10 text-red-300;
+  }
+  .badge-gold {
+    @apply border-gold/30 bg-gold/10 text-amber-200;
+  }
+  .badge-gray {
+    @apply border-line bg-panel2 text-muted;
+  }
+  .badge-blue {
+    @apply border-sky-500/30 bg-sky-500/10 text-sky-300;
+  }
+
+  .tbl-wrap {
+    @apply relative overflow-auto rounded-lg border border-line;
+  }
+  .tbl {
+    @apply w-full border-collapse text-[13px];
+    font-variant-numeric: tabular-nums;
+  }
+  .tbl thead th {
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-line bg-[#181c21] px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted;
+  }
+  .tbl tbody td {
+    @apply border-b border-line/60 px-3 py-2 align-top;
+  }
+  .tbl tbody tr {
+    @apply transition-colors;
+  }
+  .tbl tbody tr:nth-child(even) {
+    @apply bg-white/[0.015];
+  }
+  .tbl tbody tr:hover {
+    @apply bg-gold/[0.04];
+  }
+  .tbl tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .tbl .r {
+    @apply text-right;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded-md bg-panel2;
+  }
+
+  .tab {
+    @apply -mb-px whitespace-nowrap border-b-2 border-transparent px-3 py-2.5 text-sm font-medium text-muted transition-colors hover:text-slate-200;
+  }
+  .tab-active {
+    @apply border-gold text-gold;
+  }
+}
+
+/* toast / modal animations */
+@keyframes gh-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes gh-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.anim-in {
+  animation: gh-slide-in 0.18s ease-out;
+}
+.anim-fade {
+  animation: gh-fade-in 0.15s ease-out;
+}
+
+/* recharts theming */
+.recharts-cartesian-grid line {
+  stroke: #1f242b;
+}
+.recharts-text {
+  fill: #848e9c;
+  font-size: 11px;
+}
