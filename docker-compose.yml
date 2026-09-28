@@ -1,0 +1,13 @@
+services:
+  goldhunter:
+    build: .
+    container_name: goldhunter
+    restart: unless-stopped
+    # 預設只綁本機；要讓 TradingView Webhook 打進來，請放在 HTTPS 反向代理（Caddy / Nginx）後面
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data
