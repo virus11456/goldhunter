@@ -48,8 +48,15 @@ class StrategyConfig(SQLModel, table=True):
     params: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     code: str | None = Field(default=None, sa_column=Column(Text))
     pine_source: str | None = Field(default=None, sa_column=Column(Text))
-    # python 策略（尤其 AI 轉換的）預設為 pending_review，使用者審核後才能給 Bot 使用
+    # pending_review：待審核，不能交易
+    # paper_only：自動審核通過，模擬期間只能用在模擬帳戶；滿 paper_days 天且模擬成交達 min_paper_trades 筆後自動開放實盤
+    # active：可用於所有帳戶
     status: str = "active"
+    review: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # 最近一次自動審查報告
+    metrics: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # 最近一次回測績效
+    approved_at: datetime | None = None  # 審查通過（進入模擬期）的時間
+    paper_days: int = 7
+    min_paper_trades: int = 3
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -156,11 +163,33 @@ class BacktestRun(SQLModel, table=True):
 _engine = None
 
 
+def _add_missing_columns(engine) -> None:
+    """簡易遷移：新版本新增的欄位自動 ALTER TABLE 補上（SQLite 的 create_all 不會改既有資料表）"""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in SQLModel.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in existing:
+                    continue
+                ddl = col.type.compile(engine.dialect)
+                default = ""
+                if col.default is not None and getattr(col.default, "is_scalar", False):
+                    v = col.default.arg
+                    default = f" DEFAULT {int(v) if isinstance(v, bool) else repr(v)}"
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}{default}'))
+
+
 def get_engine():
     global _engine
     if _engine is None:
         _engine = create_engine(get_settings().db_url, connect_args={"check_same_thread": False})
         SQLModel.metadata.create_all(_engine)
+        _add_missing_columns(_engine)
     return _engine
 
 

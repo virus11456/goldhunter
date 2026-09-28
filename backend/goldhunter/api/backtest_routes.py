@@ -57,7 +57,7 @@ async def create_backtest(body: BacktestIn, s: Session = Depends(get_session)):
         inst = Instrument.parse(body.symbol)
         params = {**(st.params or {}), **(body.params or {})}
         strategy = build_strategy(st.kind, params, st.code, ai=ai)
-        attach_reference(strategy, s)
+        attach_reference(strategy, s, check=False)
         risk = RiskConfig(**{"daily_loss_limit_pct": 0, "max_orders_per_hour": 10_000, **body.risk})
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -79,6 +79,10 @@ async def create_backtest(body: BacktestIn, s: Session = Depends(get_session)):
         trades=[t.model_dump() for t in result.trades],
     )
     s.add(run)
+    # 策略頁顯示「最近一次回測」的績效
+    st.metrics = {**result.metrics, "symbol": body.symbol, "timeframe": body.timeframe,
+                  "start": body.start.isoformat(), "end": body.end.isoformat(), "source": "backtest"}
+    s.add(st)
     s.commit()
     s.refresh(run)
     out = run.model_dump()

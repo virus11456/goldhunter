@@ -58,6 +58,7 @@ async def run_backtest(strategy: Strategy, instrument: Instrument, timeframe: st
     stops: dict = {}
     pending: Decision | None = None
     n_decisions = ai_calls = 0
+    bars_in_market = 0
 
     async def execute(req: OrderRequest, price: float, ts: int, reason: str):
         ex.slippage = cfg.slippage
@@ -132,8 +133,13 @@ async def run_backtest(strategy: Strategy, instrument: Instrument, timeframe: st
                 if d is not None and d.action != Action.HOLD:
                     pending, n_decisions = d, n_decisions + 1
         curve.append((bar.ts, ex.equity()))
+        if ex.positions:
+            bars_in_market += 1
 
-    return BacktestResult(metrics=compute_metrics(curve, trades, candles, timeframe, cfg.initial_cash),
+    metrics = compute_metrics(curve, trades, candles, timeframe, cfg.initial_cash)
+    if candles:
+        metrics["exposure_pct"] = round(bars_in_market / len(candles) * 100, 1)
+    return BacktestResult(metrics=metrics,
                           equity_curve=curve, trades=trades, decisions=n_decisions, rejected=rejected[:200])
 
 
@@ -143,36 +149,90 @@ def _iso(ts: int) -> str:
 
 def compute_metrics(curve, trades: list[BacktestTrade], candles: list[Candle], timeframe: str,
                     initial: float) -> dict:
+    """量化策略常用績效指標（所有百分比已乘 100）"""
     if not curve:
         return {}
     equities = [e for _, e in curve]
     final = equities[-1]
-    peak, max_dd = equities[0], 0.0
-    for e in equities:
-        peak = max(peak, e)
-        max_dd = max(max_dd, (peak - e) / peak if peak else 0)
+    tf_sec = TF_SECONDS.get(timeframe, 86400)
+    periods_per_year = 365 * 86400 / tf_sec
+
+    # 回撤與最長回撤期間
+    peak, peak_i, max_dd, longest = equities[0], 0, 0.0, 0
+    for i, e in enumerate(equities):
+        if e >= peak:
+            peak, peak_i = e, i
+        else:
+            max_dd = max(max_dd, (peak - e) / peak if peak else 0)
+            longest = max(longest, i - peak_i)
+
+    # 報酬率序列 → 波動率、Sharpe、Sortino
     rets = [(b - a) / a for a, b in zip(equities, equities[1:]) if a]
-    sharpe = 0.0
+    sharpe = sortino = vol = 0.0
     if len(rets) > 1:
         mean = sum(rets) / len(rets)
         sd = math.sqrt(sum((r - mean) ** 2 for r in rets) / (len(rets) - 1))
-        periods = 365 * 86400 / TF_SECONDS.get(timeframe, 86400)
-        sharpe = mean / sd * math.sqrt(periods) if sd else 0.0
+        downside = math.sqrt(sum(min(r, 0) ** 2 for r in rets) / len(rets))
+        vol = sd * math.sqrt(periods_per_year)
+        sharpe = mean / sd * math.sqrt(periods_per_year) if sd else 0.0
+        sortino = mean / downside * math.sqrt(periods_per_year) if downside else 0.0
+
+    years = max(len(equities) * tf_sec / (365 * 86400), 1e-9)
+    total_ret = final / initial - 1
+    cagr = (final / initial) ** (1 / years) - 1 if final > 0 and years >= 1 / 365 else 0.0
+    calmar = cagr / max_dd if max_dd else None
+
+    # 逐筆交易（以平倉紀錄計算損益；持倉時間以開倉到平倉）
     closed = [t.realized_pnl for t in trades if t.realized_pnl is not None]
     wins = [p for p in closed if p > 0]
     losses = [p for p in closed if p <= 0]
+    avg_win = sum(wins) / len(wins) if wins else 0.0
+    avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
+    streak = max_streak = 0
+    for p in closed:
+        streak = streak + 1 if p <= 0 else 0
+        max_streak = max(max_streak, streak)
+    holds, open_ts = [], None
+    for t in trades:
+        if not t.reduce_only:
+            open_ts = open_ts or t.ts
+        elif open_ts is not None:
+            holds.append(t.ts - open_ts)
+            open_ts = None
     bh = (candles[-1].close / candles[0].close - 1) * 100 if candles and candles[0].close else 0.0
+
     return {
+        # 報酬
         "initial_equity": round(initial, 2),
         "final_equity": round(final, 2),
-        "total_return_pct": round((final / initial - 1) * 100, 2),
+        "total_return_pct": round(total_ret * 100, 2),
+        "cagr_pct": round(cagr * 100, 2),
         "buy_and_hold_pct": round(bh, 2),
+        "excess_return_pct": round(total_ret * 100 - bh, 2),
+        # 風險
         "max_drawdown_pct": round(max_dd * 100, 2),
+        "max_drawdown_bars": longest,
+        "max_drawdown_days": round(longest * tf_sec / 86400, 1),
+        "volatility_pct": round(vol * 100, 2),
+        # 風險調整後報酬
         "sharpe": round(sharpe, 2),
+        "sortino": round(sortino, 2),
+        "calmar": round(calmar, 2) if calmar is not None else None,
+        # 交易品質
         "trades": len(trades),
         "closed_trades": len(closed),
         "win_rate_pct": round(len(wins) / len(closed) * 100, 1) if closed else 0.0,
+        "payoff_ratio": round(avg_win / avg_loss, 2) if avg_loss else None,
         "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) else None,
+        "expectancy": round(sum(closed) / len(closed), 2) if closed else 0.0,
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(-avg_loss, 2),
+        "best_trade": round(max(closed), 2) if closed else None,
+        "worst_trade": round(min(closed), 2) if closed else None,
+        "max_consecutive_losses": max_streak,
+        # 效率與成本
+        "avg_hold_hours": round(sum(holds) / len(holds) / 3_600_000, 1) if holds else None,
         "total_fees": round(sum(t.fee for t in trades), 2),
         "bars": len(candles),
+        "days": round(years * 365, 1),
     }

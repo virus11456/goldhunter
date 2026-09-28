@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,15 +11,19 @@ from sqlmodel import Session, select
 
 from goldhunter.ai.base import AIProviderError
 from goldhunter.ai.registry import available_providers
+from goldhunter.backtest.data import fetch_history
 from goldhunter.copilot.config import CopilotConfig
+from goldhunter.core.models import Instrument
 from goldhunter.core.secrets import decrypt, encrypt, mask
 from goldhunter.engine.manager import exchange_from_account, provider_from_config
 from goldhunter.exchanges.registry import available_exchanges
 from goldhunter.risk.manager import RiskConfig
 from goldhunter.store.db import AIModelConfig, Bot, ExchangeAccount, StrategyConfig, get_session
 from goldhunter.strategies.custom import TEMPLATE, StrategyCodeError, load_strategy_class, validate_code
+from goldhunter.strategies.lifecycle import STATUS_LABEL, maybe_promote, promotion_progress
 from goldhunter.strategies.registry import BUILTIN, list_strategy_types
 from goldhunter.tradingview.pine_converter import convert_pine
+from goldhunter.tradingview.review import run_review
 
 router = APIRouter()
 
@@ -202,8 +207,11 @@ class StrategyIn(BaseModel):
     code: str | None = None
 
 
-def strategy_out(st: StrategyConfig) -> dict:
-    return st.model_dump()
+def strategy_out(st: StrategyConfig, s: Session | None = None) -> dict:
+    d = st.model_dump()
+    d["status_label"] = STATUS_LABEL.get(st.status, st.status)
+    d["paper_progress"] = promotion_progress(st, s) if s is not None else None
+    return d
 
 
 def _check_strategy(body: StrategyIn) -> None:
@@ -220,7 +228,11 @@ def _check_strategy(body: StrategyIn) -> None:
 
 @router.get("/strategies")
 def list_strategies(s: Session = Depends(get_session)):
-    return [strategy_out(x) for x in s.exec(select(StrategyConfig))]
+    out = []
+    for x in s.exec(select(StrategyConfig)).all():
+        maybe_promote(x, s)  # 模擬期滿自動開放實盤
+        out.append(strategy_out(x, s))
+    return out
 
 
 @router.post("/strategies")
@@ -238,7 +250,7 @@ def update_strategy(sid: int, body: StrategyIn, s: Session = Depends(get_session
     st = s.get(StrategyConfig, sid) or _404()
     _check_strategy(body)
     if body.code != st.code and body.kind == "python":
-        st.status = "pending_review"  # 程式碼有改就要重新審核
+        st.status, st.review, st.approved_at = "pending_review", {}, None  # 程式碼有改就要重新審核
     st.name, st.kind, st.params, st.code = body.name, body.kind, body.params, body.code
     s.add(st)
     s.commit()
@@ -268,7 +280,7 @@ def activate_strategy(sid: int, s: Session = Depends(get_session)):
     s.add(st)
     s.commit()
     s.refresh(st)
-    return strategy_out(st)
+    return strategy_out(st, s)
 
 
 class CodeIn(BaseModel):
@@ -288,17 +300,62 @@ def validate_strategy(body: CodeIn):
     return {"ok": False, "errors": errors}
 
 
-class PineIn(BaseModel):
+class ReviewSettings(BaseModel):
+    """自動審查用的行情：交易所、交易對、K 線週期，以及選填的 TradingView 交易清單 CSV"""
+
+    exchange_id: str = "binance"
+    symbol: str = "crypto:BTC/USDT:perp"
+    timeframe: str = "1h"
+    tv_csv: str | None = None
+
+
+class PineIn(ReviewSettings):
     name: str
     pine: str
     ai_model_id: int
 
 
+class ReviewIn(ReviewSettings):
+    ai_model_id: int
+
+
+async def _review_and_save(st: StrategyConfig, ai, body: ReviewSettings, s: Session) -> dict:
+    """跑四關審查；通過 → 進入模擬期（paper_only），否則維持待審核"""
+    try:
+        inst = Instrument.parse(body.symbol)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    async def candles(start, end):
+        return await fetch_history(body.exchange_id, inst, body.timeframe, int(start.timestamp() * 1000),
+                                   int(end.timestamp() * 1000))
+
+    report = await run_review(ai=ai, pine=st.pine_source or "", code=st.code or "", params=st.params or {},
+                              inst=inst, timeframe=body.timeframe, fetch_candles=candles, tv_csv=body.tv_csv)
+    st.review = report.model_dump()
+    if report.metrics:
+        st.metrics = {**report.metrics, "symbol": body.symbol, "timeframe": body.timeframe, "source": "review"}
+    if report.passed:
+        st.status, st.approved_at = "paper_only", datetime.now(UTC)
+    else:
+        st.status, st.approved_at = "pending_review", None
+    s.add(st)
+    s.commit()
+    s.refresh(st)
+    return report.model_dump()
+
+
+def _ai_for(model_id: int, s: Session):
+    m = s.get(AIModelConfig, model_id) or _404("AI 模型不存在")
+    return provider_from_config(m)
+
+
 @router.post("/strategies/convert-pine")
 async def convert_pine_route(body: PineIn, s: Session = Depends(get_session)):
-    m = s.get(AIModelConfig, body.ai_model_id) or _404("AI 模型不存在")
+    """貼上 Pine Script → AI 轉換 → 自動審查（四關）→ 通過即進入模擬期"""
+    ai = _ai_for(body.ai_model_id, s)
     try:
-        result = await convert_pine(provider_from_config(m), body.pine)
+        result = await convert_pine(ai, body.pine)
     except AIProviderError as e:
         raise HTTPException(502, str(e)) from e
     params: dict = {}
@@ -309,7 +366,54 @@ async def convert_pine_route(body: PineIn, s: Session = Depends(get_session)):
     s.add(st)
     s.commit()
     s.refresh(st)
-    return {"strategy": strategy_out(st), "conversion": result.model_dump()}
+    review = await _review_and_save(st, ai, body, s) if result.ok else None
+    return {"strategy": strategy_out(st, s), "conversion": result.model_dump(), "review": review}
+
+
+@router.post("/strategies/{sid}/review")
+async def review_strategy(sid: int, body: ReviewIn, s: Session = Depends(get_session)):
+    """重新審查（例如補上 TradingView 交易清單 CSV、換交易對 / 週期）"""
+    st = s.get(StrategyConfig, sid) or _404()
+    if st.kind != "python":
+        raise HTTPException(400, "只有自訂 / Pine 轉換的策略需要審查")
+    review = await _review_and_save(st, _ai_for(body.ai_model_id, s), body, s)
+    return {"strategy": strategy_out(st, s), "review": review}
+
+
+@router.post("/strategies/{sid}/fix")
+async def fix_strategy(sid: int, body: ReviewIn, s: Session = Depends(get_session)):
+    """讓 AI 依審查報告修正程式碼，然後重新審查"""
+    st = s.get(StrategyConfig, sid) or _404()
+    if st.kind != "python" or not st.pine_source:
+        raise HTTPException(400, "只有 Pine 轉換的策略可以讓 AI 修正")
+    problems = [f"{stg['name']}：{stg['summary']}；" + "；".join(stg.get("details", [])[:6])
+                for stg in (st.review or {}).get("stages", []) if stg.get("status") == "failed"]
+    if not problems:
+        raise HTTPException(400, "審查報告沒有需要修正的問題")
+    ai = _ai_for(body.ai_model_id, s)
+    try:
+        result = await convert_pine(ai, st.pine_source, previous_code=st.code, problems=problems)
+    except AIProviderError as e:
+        raise HTTPException(502, str(e)) from e
+    if not result.ok:
+        return {"strategy": strategy_out(st, s), "conversion": result.model_dump(), "review": st.review}
+    st.code = result.code
+    st.params = dict(load_strategy_class(result.code).default_params)
+    review = await _review_and_save(st, ai, body, s)
+    return {"strategy": strategy_out(st, s), "conversion": result.model_dump(), "review": review}
+
+
+@router.post("/strategies/{sid}/promote")
+def promote_strategy(sid: int, s: Session = Depends(get_session)):
+    """手動開放實盤（跳過模擬期剩餘時間）"""
+    st = s.get(StrategyConfig, sid) or _404()
+    if st.status != "paper_only":
+        raise HTTPException(400, "只有模擬期中的策略可以開放實盤")
+    st.status = "active"
+    s.add(st)
+    s.commit()
+    s.refresh(st)
+    return strategy_out(st, s)
 
 
 def _404(msg: str = "找不到資料"):

@@ -23,16 +23,19 @@ def list_strategy_types() -> list[dict]:
     return items
 
 
-def attach_reference(strategy: Strategy, session) -> None:
+def attach_reference(strategy: Strategy, session, paper_account: bool = True, check: bool = True) -> None:
     """AI 交易員：依 reference_strategy_id 載入要參考的策略（只接受規則型 / 自訂 Python、且已啟用）"""
     ref_id = strategy.params.get("reference_strategy_id") if isinstance(strategy, AIStrategy) else None
     if not ref_id:
         return
     from goldhunter.store.db import StrategyConfig
+    from goldhunter.strategies.lifecycle import check_usable
 
     cfg = session.get(StrategyConfig, int(ref_id))
-    if not cfg or cfg.kind in ("ai", "tradingview") or cfg.status != "active":
-        raise ValueError("參考策略不存在、未啟用，或類型不支援（只能參考規則型或自訂 Python 策略）")
+    if not cfg or cfg.kind in ("ai", "tradingview"):
+        raise ValueError("參考策略不存在，或類型不支援（只能參考規則型或自訂 Python 策略）")
+    if check:  # 回測不需檢查上線狀態
+        check_usable(cfg, paper_account, session)
     strategy.reference = build_strategy(cfg.kind, cfg.params, cfg.code)  # type: ignore[attr-defined]
     strategy.reference_name = cfg.name  # type: ignore[attr-defined]
 

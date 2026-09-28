@@ -262,3 +262,52 @@ def test_ai_trader_without_strategy(client):
                      json={**body, "ai_trader": {"instructions": "改成雙向交易"}}).json()
     assert upd["ai_trader"]["instructions"] == "改成雙向交易"
     assert len(client.get("/api/strategies", headers=H).json()) == n_before
+
+
+def test_pine_auto_review_lifecycle(client, monkeypatch):
+    from goldhunter.api import settings_routes
+
+    from .test_custom_strategy import GOOD
+    from .test_review import EQUIV
+
+    async def fetch_history(exchange_id, inst, tf, s, e):
+        return make_candles(600, period=40, amp=15)
+
+    monkeypatch.setattr(settings_routes, "fetch_history", fetch_history)
+    monkeypatch.setattr(settings_routes, "provider_from_config", lambda cfg: client.ai)
+    client.ai.replies = [GOOD, EQUIV]
+    ai = client.post("/api/ai-models", headers=H, json={"name": "c", "provider": "anthropic", "api_key": "k"}).json()
+    r = client.post("/api/strategies/convert-pine", headers=H,
+                    json={"name": "Pine 策略", "pine": "//@version=5", "ai_model_id": ai["id"]}).json()
+    st = r["strategy"]
+    assert r["review"]["passed"], r["review"]
+    assert st["status"] == "paper_only" and st["metrics"]["sharpe"] is not None
+    assert st["paper_progress"]["days_required"] == 7
+
+    paper = client.post("/api/accounts", headers=H, json={"name": "p", "exchange_id": "binance"}).json()
+    live = client.post("/api/accounts", headers=H, json={"name": "l", "exchange_id": "binance", "paper": False,
+                                                         "api_key": "k", "secret": "s"}).json()
+    base = {"strategy_id": st["id"], "symbols": ["crypto:BTC/USDT:perp"], "timeframe": "1h", "interval_sec": 3600,
+            "copilot": {"review": False, "manage": False}}
+    b_live = client.post("/api/bots", headers=H, json={**base, "name": "live", "account_id": live["id"]}).json()
+    b_paper = client.post("/api/bots", headers=H, json={**base, "name": "paper", "account_id": paper["id"]}).json()
+    r_live = client.post(f"/api/bots/{b_live['id']}/start", headers=H)
+    assert r_live.status_code == 400 and "模擬期" in r_live.json()["detail"]
+    assert client.post(f"/api/bots/{b_paper['id']}/start", headers=H).status_code == 200
+    client.post(f"/api/bots/{b_paper['id']}/stop", headers=H)
+
+    # 手動開放實盤
+    assert client.post(f"/api/strategies/{st['id']}/promote", headers=H).json()["status"] == "active"
+    assert client.post(f"/api/bots/{b_live['id']}/start", headers=H).status_code == 200
+    client.post(f"/api/bots/{b_live['id']}/stop", headers=H)
+
+    # 審查沒過 → 讓 AI 修正後重審
+    from .test_review import NOT_EQUIV
+
+    client.ai.replies = [GOOD, NOT_EQUIV]
+    r2 = client.post("/api/strategies/convert-pine", headers=H,
+                     json={"name": "Pine 2", "pine": "//@version=5", "ai_model_id": ai["id"]}).json()
+    assert r2["strategy"]["status"] == "pending_review" and not r2["review"]["passed"]
+    client.ai.replies = [GOOD, EQUIV]
+    fixed = client.post(f"/api/strategies/{r2['strategy']['id']}/fix", headers=H, json={"ai_model_id": ai["id"]}).json()
+    assert fixed["review"]["passed"] and fixed["strategy"]["status"] == "paper_only"

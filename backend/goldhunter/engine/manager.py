@@ -16,6 +16,7 @@ from goldhunter.exchanges.base import ExchangeAdapter
 from goldhunter.exchanges.registry import build_exchange
 from goldhunter.risk.manager import RiskConfig
 from goldhunter.store.db import AIModelConfig, Bot, ExchangeAccount, StrategyConfig, get_engine
+from goldhunter.strategies.lifecycle import check_usable
 from goldhunter.strategies.registry import attach_reference, build_strategy
 
 log = logging.getLogger("goldhunter.manager")
@@ -41,8 +42,7 @@ class BotManager:
         strat_cfg = session.get(StrategyConfig, bot.strategy_id)
         if not acc or not strat_cfg:
             raise ValueError("Bot 的交易所帳戶或策略不存在")
-        if strat_cfg.status != "active":
-            raise ValueError("策略尚未審核啟用（Pine 轉換的策略需先檢視程式碼並啟用）")
+        check_usable(strat_cfg, acc.paper, session)
         ai = None
         if bot.ai_model_id:
             ai_cfg = session.get(AIModelConfig, bot.ai_model_id)
@@ -53,7 +53,7 @@ class BotManager:
         if strat_cfg.kind != "tradingview":
             params = {**(strat_cfg.params or {}), **(bot.params_override or {})}
             strategy = build_strategy(strat_cfg.kind, params, strat_cfg.code, ai=ai)
-            attach_reference(strategy, session)
+            attach_reference(strategy, session, paper_account=acc.paper)
             if strategy.uses_ai and ai is None:
                 raise ValueError("此策略需要 AI 模型，請在 Bot 設定中選擇")
         if not bot.symbols:

@@ -84,8 +84,15 @@ def extract_notes(code: str) -> list[str]:
     return notes
 
 
-async def convert_pine(ai: AIProvider, pine: str, max_attempts: int = 3) -> ConversionResult:
+async def convert_pine(ai: AIProvider, pine: str, max_attempts: int = 3, previous_code: str | None = None,
+                       problems: list[str] | None = None) -> ConversionResult:
+    """轉換 Pine Script；帶 previous_code + problems 時代表「依審查報告修正上一版」"""
     prompt = f"請轉換以下 Pine Script：\n```pine\n{pine}\n```"
+    if previous_code and problems:
+        prompt = (
+            f"原始 Pine Script：\n```pine\n{pine}\n```\n\n目前的 Python 轉換：\n```python\n{previous_code}```\n\n"
+            "自動審查發現以下問題，請修正後重新輸出完整程式碼：\n- " + "\n- ".join(problems)
+        )
     code, errors = "", []
     for attempt in range(1, max_attempts + 1):
         text = await ai.complete_text(CONVERTER_SYSTEM, prompt)
