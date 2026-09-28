@@ -220,3 +220,45 @@ def test_baseline_exists_before_first_signal(client):
     assert runner.baseline is not None
     assert runner.baseline.equity() == pytest.approx(10_000)
     client.post(f"/api/bots/{bot['id']}/stop", headers=H)
+
+
+def test_ai_trader_without_strategy(client):
+    """AI 交易員：不需先建立策略，多幣種，AI 會看到市場情報與參考策略訊號"""
+    acc = client.post("/api/accounts", headers=H, json={"name": "p", "exchange_id": "binance"}).json()
+    ai = client.post("/api/ai-models", headers=H, json={"name": "c", "provider": "anthropic", "api_key": "k"}).json()
+    ref = client.post("/api/strategies", headers=H, json={"name": "我的均線", "kind": "ma_cross",
+                                                         "params": {"fast": 5, "slow": 15}}).json()
+    body = {"name": "AI 交易員", "account_id": acc["id"], "ai_model_id": ai["id"],
+            "symbols": ["crypto:BTC/USDT:perp", "crypto:ETH/USDT:perp"], "timeframe": "1h", "interval_sec": 3600,
+            "ai_trader": {"instructions": "只做多，不追高", "reference_strategy_id": ref["id"]}}
+    assert client.post("/api/bots", headers=H, json={**body, "ai_model_id": None}).status_code == 400
+    bot = client.post("/api/bots", headers=H, json=body).json()
+    assert bot["mode"] == "ai_trader" and bot["strategy_kind"] == "ai"
+    assert bot["ai_trader"]["instructions"] == "只做多，不追高"
+    assert bot["ai_trader"]["reference_strategy_id"] == ref["id"]
+
+    prompts = []
+
+    async def ai_json(system, user, schema):
+        from goldhunter.ai.base import AIResult
+        prompts.append((system, user))
+        d = {"action": "open_long", "size_pct": 10, "leverage": 2, "stop_loss": 1, "take_profit": None,
+             "confidence": 0.9, "reasoning": "趨勢向上"}
+        return AIResult(decision=d, raw_text="{}", model="fake")
+
+    client.ai.complete_json = ai_json
+    assert client.post(f"/api/bots/{bot['id']}/start", headers=H).status_code == 200
+    _tick(client, bot["id"], 3)
+    system, user = prompts[-1]
+    assert "AI 交易員" in system
+    assert "只做多，不追高" in user and "恐懼貪婪指數" in user and "我的均線" in user
+    trades = client.get(f"/api/trades?bot_id={bot['id']}", headers=H).json()
+    assert {t["instrument"] for t in trades} == {"crypto:BTC/USDT:perp", "crypto:ETH/USDT:perp"}
+    assert all(t["source"] == "ai" for t in trades)
+    client.post(f"/api/bots/{bot['id']}/stop", headers=H)
+    # 修改指示：更新同一個專屬策略，不會多建一個
+    n_before = len(client.get("/api/strategies", headers=H).json())
+    upd = client.put(f"/api/bots/{bot['id']}", headers=H,
+                     json={**body, "ai_trader": {"instructions": "改成雙向交易"}}).json()
+    assert upd["ai_trader"]["instructions"] == "改成雙向交易"
+    assert len(client.get("/api/strategies", headers=H).json()) == n_before

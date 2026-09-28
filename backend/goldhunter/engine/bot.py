@@ -168,6 +168,9 @@ class BotRunner:
                     continue
                 self.last_bar[inst] = closed[-1].ts
                 ctx = await self._context(inst, closed)
+                if self.strategy.uses_ai:
+                    ctx.intel = (await self._intel(inst)).to_prompt()
+                    ctx.recent_pnls = self._recent_pnls()
                 decision = await self.strategy.run(ctx)
                 if decision is None:
                     continue

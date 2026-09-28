@@ -27,6 +27,9 @@ class StrategyContext(BaseModel):
     capabilities: Capabilities
     max_leverage: int = 1
     max_size_pct: float = 100.0
+    # 引擎提供給 AI 交易員的額外資訊（回測時為空）
+    intel: str | None = None  # 市場情報（新聞、總經、合約數據、情緒）
+    recent_pnls: list[float] = []  # 此 Bot 近期已平倉損益
 
     # ---- 方便策略使用的序列（對應 Pine 的 open/high/low/close/volume）----
     @property

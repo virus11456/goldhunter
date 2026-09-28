@@ -18,10 +18,19 @@ from goldhunter.store.db import Bot, DecisionLog, EquitySnapshot, StrategyConfig
 router = APIRouter()
 
 
+class AITraderIn(BaseModel):
+    """直接建立 AI 交易員（不需先建立策略）"""
+
+    instructions: str = ""
+    reference_strategy_id: int | None = None
+    min_confidence: float = 0.6
+
+
 class BotIn(BaseModel):
     name: str
     account_id: int
-    strategy_id: int
+    strategy_id: int | None = None
+    ai_trader: AITraderIn | None = None
     ai_model_id: int | None = None
     symbols: list[str]
     timeframe: str = "15m"
@@ -37,6 +46,12 @@ def bot_out(b: Bot, s: Session) -> dict:
     d = b.model_dump()
     d["strategy_name"] = strat.name if strat else None
     d["strategy_kind"] = strat.kind if strat else None
+    d["mode"] = "ai_trader" if strat and strat.kind == "ai" else ("tradingview" if strat and strat.kind == "tradingview"
+                                                                   else "strategy")
+    d["ai_trader"] = (
+        {k: (strat.params or {}).get(k) for k in ("instructions", "reference_strategy_id", "min_confidence")}
+        if strat and strat.kind == "ai" else None
+    )
     d["running"] = bool(runner and runner.running)
     d["copilot"] = CopilotConfig(**(b.copilot or {})).model_dump()
     cp = d["copilot"]
@@ -52,6 +67,29 @@ def bot_out(b: Bot, s: Session) -> dict:
     d["equity"] = eq.equity if eq else None
     d["baseline_equity"] = eq.baseline_equity if eq else None
     return d
+
+
+def _ensure_strategy(body: BotIn, s: Session, existing: Bot | None = None) -> None:
+    """ai_trader 模式：建立（或更新此 Bot 專屬的）AI 交易員策略"""
+    if body.ai_trader is None:
+        if not body.strategy_id:
+            raise HTTPException(400, "請選擇策略，或使用 AI 交易員模式")
+        return
+    if not body.ai_model_id:
+        raise HTTPException(400, "AI 交易員需要選擇 AI 模型")
+    from goldhunter.strategies.ai_strategy import AIStrategy
+
+    params = {**AIStrategy.default_params, **body.ai_trader.model_dump(exclude_none=False)}
+    if not params["instructions"]:
+        params["instructions"] = AIStrategy.default_params["instructions"]
+    st = s.get(StrategyConfig, existing.strategy_id) if existing else None
+    if not (st and st.kind == "ai" and st.name.startswith("AI 交易員｜")):
+        st = StrategyConfig(name=f"AI 交易員｜{body.name}", kind="ai")
+    st.params, st.status = params, "active"
+    s.add(st)
+    s.commit()
+    s.refresh(st)
+    body.strategy_id = st.id
 
 
 def _validate(body: BotIn) -> None:
@@ -74,7 +112,8 @@ def list_bots(s: Session = Depends(get_session)):
 @router.post("/bots")
 def create_bot(body: BotIn, s: Session = Depends(get_session)):
     _validate(body)
-    b = Bot(**body.model_dump(exclude={"risk", "copilot"}), risk=RiskConfig(**body.risk).model_dump(),
+    _ensure_strategy(body, s)
+    b = Bot(**body.model_dump(exclude={"risk", "copilot", "ai_trader"}), risk=RiskConfig(**body.risk).model_dump(),
             copilot=CopilotConfig(**body.copilot).model_dump())
     s.add(b)
     s.commit()
@@ -88,7 +127,8 @@ def update_bot(bot_id: int, body: BotIn, s: Session = Depends(get_session)):
     if manager.runners.get(bot_id):
         raise HTTPException(400, "請先停止 Bot 再修改設定")
     _validate(body)
-    for k, v in body.model_dump().items():
+    _ensure_strategy(body, s, existing=b)
+    for k, v in body.model_dump(exclude={"ai_trader"}).items():
         setattr(b, k, v)
     b.risk = RiskConfig(**body.risk).model_dump()
     b.copilot = CopilotConfig(**body.copilot).model_dump()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from goldhunter.ai.base import DECISION_SCHEMA
 from goldhunter.core.models import Action, Decision
 from goldhunter.strategies import ta
 from goldhunter.strategies.base import Strategy, StrategyContext
@@ -40,26 +41,72 @@ def build_market_prompt(ctx: StrategyContext, instructions: str, bars: int = 30,
 """
 
 
+TRADER_SYSTEM = """你是一位紀律嚴謹的加密貨幣永續合約交易員（AI 交易員），自主管理這個帳戶。
+根據使用者提供的行情、技術指標、市場情報（新聞、總經、合約數據、情緒）、目前持倉、近期績效與交易偏好，
+對這個交易對輸出單一決策：
+- open_long / open_short：開倉（已有反向持倉時代表反手）
+- close：平掉目前持倉
+- hold：不動作（沒有明確優勢時就選 hold，寧可錯過不要做錯）
+規則：
+- 只能輸出符合 schema 的 JSON。
+- 開倉必須給 stop_loss；建議給 take_profit，盈虧比至少 1:1.5。
+- size_pct（佔權益 %）與 leverage 不得超過使用者給的上限。
+- 重大經濟數據公布前、資金費率極端或新聞重大利空時，要特別保守。
+- 若有「參考策略訊號」，把它當成一個參考意見，不必盲從。
+- reasoning 用繁體中文，150 字內，列出關鍵依據（技術面 / 籌碼面 / 消息面）。"""
+
+
 class AIStrategy(Strategy):
+    """AI 交易員：不需要事先寫策略，AI 自主判斷多空、倉位與止損。"""
+
     name = "ai"
-    description = "AI 決策：由你選擇的 AI 模型根據行情與你的策略指示做判斷"
+    description = "AI 交易員：AI 綜合行情、新聞、總經與合約數據，自主決定多空、倉位與止損（可參考你的策略訊號）"
     default_params = {
-        "instructions": "趨勢跟隨，順勢交易，嚴格止損，盈虧比至少 1:2。",
-        "bars": 30,
+        "instructions": "順勢交易為主，嚴格止損，盈虧比至少 1:2；重大數據公布前不追價。",
+        "bars": 40,
         "min_confidence": 0.6,
+        "reference_strategy_id": None,  # 選填：讓 AI 參考的策略
     }
     warmup = 60
     uses_ai = True
 
+    def __init__(self, params=None, ai=None):
+        super().__init__(params, ai)
+        self.reference: Strategy | None = None  # 由 BotManager 依 reference_strategy_id 注入
+        self.reference_name: str | None = None
+        self.last_ai_result = None
+
+    async def _reference_text(self, ctx: StrategyContext) -> str:
+        if not self.reference:
+            return ""
+        try:
+            sig = await self.reference.run(ctx)
+        except Exception as e:  # 參考策略出錯不影響 AI 判斷
+            return f"\n## 參考策略訊號\n參考策略「{self.reference_name}」執行失敗：{e}"
+        if sig is None:
+            desc = "目前沒有訊號"
+        else:
+            desc = f"{sig.action.value}（倉位 {sig.size_pct}%、止損 {sig.stop_loss}）理由：{sig.reasoning}"
+        return f"\n## 參考策略訊號\n你的策略「{self.reference_name}」：{desc}"
+
     async def on_bar(self, ctx: StrategyContext):
         if self.ai is None:
-            raise RuntimeError("AI 策略需要設定 AI 模型")
-        prompt = build_market_prompt(ctx, self.p("instructions"), int(self.p("bars")))
-        result = await self.ai.decide(prompt)
+            raise RuntimeError("AI 交易員需要設定 AI 模型")
+        extra = ""
+        if ctx.recent_pnls:
+            wins = sum(1 for p in ctx.recent_pnls if p > 0)
+            extra += (f"\n近期已平倉 {len(ctx.recent_pnls)} 筆：勝 {wins} 敗 {len(ctx.recent_pnls) - wins}，"
+                      f"合計 {sum(ctx.recent_pnls):.2f}")
+        extra += await self._reference_text(ctx)
+        prompt = build_market_prompt(ctx, self.p("instructions"), int(self.p("bars")), extra=extra)
+        if ctx.intel:
+            prompt += "\n\n" + ctx.intel
+        result = await self.ai.complete_json(TRADER_SYSTEM, prompt, DECISION_SCHEMA)
         d = result.decision
+        action = d.get("action", "hold")
         decision = Decision(
             instrument=ctx.instrument,
-            action=Action(d["action"]),
+            action=Action(action) if action in Action._value2member_map_ else Action.HOLD,
             size_pct=max(0.0, min(float(d.get("size_pct") or 0), 100.0)),
             leverage=max(1, int(d.get("leverage") or 1)),
             stop_loss=d.get("stop_loss"),

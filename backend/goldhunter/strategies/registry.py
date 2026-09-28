@@ -15,11 +15,26 @@ def list_strategy_types() -> list[dict]:
         {"type": k, "description": v.description, "default_params": v.default_params, "uses_ai": v.uses_ai}
         for k, v in BUILTIN.items()
     ]
+    items.sort(key=lambda x: x["type"] != "ai")  # AI 交易員排第一
     items.append({"type": "python", "description": "自訂 Python 策略（可由 TradingView Pine Script 轉換）",
                   "default_params": {}, "uses_ai": False})
     items.append({"type": "tradingview", "description": "TradingView 訊號：由 TradingView Alert Webhook 觸發下單",
                   "default_params": {}, "uses_ai": False})
     return items
+
+
+def attach_reference(strategy: Strategy, session) -> None:
+    """AI 交易員：依 reference_strategy_id 載入要參考的策略（只接受規則型 / 自訂 Python、且已啟用）"""
+    ref_id = strategy.params.get("reference_strategy_id") if isinstance(strategy, AIStrategy) else None
+    if not ref_id:
+        return
+    from goldhunter.store.db import StrategyConfig
+
+    cfg = session.get(StrategyConfig, int(ref_id))
+    if not cfg or cfg.kind in ("ai", "tradingview") or cfg.status != "active":
+        raise ValueError("參考策略不存在、未啟用，或類型不支援（只能參考規則型或自訂 Python 策略）")
+    strategy.reference = build_strategy(cfg.kind, cfg.params, cfg.code)  # type: ignore[attr-defined]
+    strategy.reference_name = cfg.name  # type: ignore[attr-defined]
 
 
 def build_strategy(kind: str, params: dict[str, Any] | None = None, code: str | None = None, ai=None) -> Strategy:

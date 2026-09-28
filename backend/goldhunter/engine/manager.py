@@ -16,7 +16,7 @@ from goldhunter.exchanges.base import ExchangeAdapter
 from goldhunter.exchanges.registry import build_exchange
 from goldhunter.risk.manager import RiskConfig
 from goldhunter.store.db import AIModelConfig, Bot, ExchangeAccount, StrategyConfig, get_engine
-from goldhunter.strategies.registry import build_strategy
+from goldhunter.strategies.registry import attach_reference, build_strategy
 
 log = logging.getLogger("goldhunter.manager")
 
@@ -53,6 +53,7 @@ class BotManager:
         if strat_cfg.kind != "tradingview":
             params = {**(strat_cfg.params or {}), **(bot.params_override or {})}
             strategy = build_strategy(strat_cfg.kind, params, strat_cfg.code, ai=ai)
+            attach_reference(strategy, session)
             if strategy.uses_ai and ai is None:
                 raise ValueError("此策略需要 AI 模型，請在 Bot 設定中選擇")
         if not bot.symbols:
