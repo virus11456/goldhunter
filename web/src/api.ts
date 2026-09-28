@@ -2,7 +2,10 @@
 
 const TOKEN_KEY = 'goldhunter_token'
 
+export const DEMO = import.meta.env.VITE_DEMO === '1'
+
 export function getToken(): string | null {
+  if (DEMO) return 'demo'
   try {
     return localStorage.getItem(TOKEN_KEY)
   } catch {
@@ -52,6 +55,10 @@ function detailToMessage(detail: unknown): string {
 }
 
 async function request<T>(method: string, path: string, body?: unknown, auth = true): Promise<T> {
+  if (DEMO) {
+    const { mockRequest } = await import('./demo/mock')
+    return (await mockRequest(method, path, body)) as T
+  }
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   if (auth) {
