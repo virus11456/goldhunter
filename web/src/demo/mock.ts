@@ -397,6 +397,9 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
   // ---- 進場分析（回測頁）：真實後端錄下的結果 ----
   if (seg[0] === 'analysis' && seg[1] === 'entry') {
     await wait(900)
+    // 只錄了「BTC 均線趨勢 × BTC 1h」這一組；其他組合不假造結果
+    if (body.strategy_id !== 1 || body.symbol !== 'crypto:BTC/USDT:perp' || body.timeframe !== '1h')
+      throw new ApiError(400, '展示模式沒有連接交易所，無法分析這個組合。只錄了一組示範：策略「BTC 均線趨勢」× BTC × 1 小時。部署到自己的主機後，就會用交易所的真實行情計算。')
     return clone(body.direction === 'long' ? db.analysis_entry_long : body.direction === 'short' ? db.analysis_entry_short : db.analysis_entry)
   }
 
@@ -500,6 +503,10 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
       return { ok: true }
     }
     await wait(1200)
+    // 展示模式不能真的回測：只重播錄好的那一組，其他組合直接說明，不拿別的結果冒充
+    const rec = db.backtest_run
+    if (body.strategy_id !== rec.strategy_id || body.symbol !== rec.instrument || body.timeframe !== rec.timeframe)
+      throw new ApiError(400, `展示模式沒有連接交易所，無法回測這個組合（畫面上的數字都是模擬資料）。只錄了一組示範回測：策略「${rec.strategy_name}」× BTC × ${rec.timeframe}。部署到自己的主機後，回測會下載交易所的真實歷史 K 線。`)
     const st = db.strategies.find((s: Json) => s.id === body.strategy_id)
     const run = { ...clone(db.backtest_run), id: nextId++, created_at: now(), strategy_id: body.strategy_id,
       strategy_name: st?.name ?? db.backtest_run.strategy_name, instrument: body.symbol, timeframe: body.timeframe,
