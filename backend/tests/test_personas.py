@@ -192,3 +192,16 @@ async def test_ai_trader_uses_persona_as_brain(candles):
 
 def b64(text: str | bytes) -> str:
     return base64.b64encode(text.encode() if isinstance(text, str) else text).decode()
+
+
+def test_upload_quality_check():
+    q = parse_nuwa("SKILL.md", SKILL_MD.encode()).quality
+    keys = {c.key: c.ok for c in q.checks}
+    assert keys["models"] and keys["rules"] and keys["anti"] and keys["bounds"]
+    assert not keys["fidelity"] and q.level in ("ok", "good")
+    # 只談人生哲學、幾乎沒提交易的檔案 → 交易相關度不足
+    life = ("# 某哲學家 · 思维操作系统\n## 核心心智模型\n" + "人生要簡單、快樂、讀書。" * 40 +
+            "\n## 决策启发式\n1. 多讀書\n")
+    q2 = parse_nuwa("SKILL.md", life.encode()).quality
+    t = next(c for c in q2.checks if c.key == "trading")
+    assert not t.ok and "聚焦" in t.detail and q2.level == "weak"

@@ -27,6 +27,7 @@ from goldhunter.store.db import (
 )
 
 router = APIRouter()
+MIN_SAMPLE_DAYS, MIN_SAMPLE_TRADES = 14, 30  # 大師組合績效至少要這麼多樣本才有比較意義
 
 
 def persona_out(p: Persona, s: Session, full: bool = False) -> dict:
@@ -93,7 +94,8 @@ def upload_persona(body: UploadIn, s: Session = Depends(get_session)):
                 fidelity=parsed.fidelity.model_dump() if parsed.fidelity else {},
                 meta={"files": parsed.files, "kept_sections": parsed.kept_sections,
                       "dropped_sections": parsed.dropped_sections, "truncated": parsed.truncated,
-                      "filename": body.filename, "raw_skill": parsed.raw_skill})
+                      "filename": body.filename, "raw_skill": parsed.raw_skill,
+                      "quality": parsed.quality.model_dump() if parsed.quality else None})
     _status_from_fidelity(p)
     s.add(p)
     s.commit()
@@ -227,6 +229,12 @@ def masters_overview(s: Session = Depends(get_session)):
             peak = max(peak, e)
             mdd = max(mdd, (peak - e) / peak if peak else 0)
         step = max(1, len(snaps) // 200)
+        days = ((snaps[-1].ts - snaps[0].ts).total_seconds() / 86400) if len(snaps) > 1 else 0.0
+        acc = s.get(ExchangeAccount, bot.account_id)
+        sample_warning = None
+        if len(closed) < MIN_SAMPLE_TRADES or days < MIN_SAMPLE_DAYS:
+            sample_warning = (f"樣本太少（{days:.1f} 天、平倉 {len(closed)} 筆），績效還不具參考性；"
+                              f"至少跑滿 {MIN_SAMPLE_DAYS} 天、{MIN_SAMPLE_TRADES} 筆再比較")
         runner = manager.runners.get(bot.id)  # type: ignore[arg-type]
         out.append({
             "bot_id": bot.id, "name": bot.name, "running": bool(runner and runner.running), "status": bot.status,
@@ -243,6 +251,7 @@ def masters_overview(s: Session = Depends(get_session)):
             "win_rate_pct": round(sum(1 for x in closed if x > 0) / len(closed) * 100, 1) if closed else None,
             "realized_pnl": round(sum(closed), 2),
             "open_positions": len(runner.exchange.positions) if runner and hasattr(runner.exchange, "positions") else None,
+            "days": round(days, 1), "paper": bool(acc.paper) if acc else None, "sample_warning": sample_warning,
             "curve": [{"ts": x.ts, "pct": round((x.equity / start - 1) * 100, 3) if start else 0}
                       for x in snaps[::step]],
         })

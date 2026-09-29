@@ -111,6 +111,9 @@ function MasterCard({ m, color }: { m: MasterPortfolio; color: string }) {
         <BotStatusBadge running={m.running} status={m.status} />
       </div>
       {m.plan?.style_summary && <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-slate-400">{m.plan.style_summary}</p>}
+      {m.sample_warning && (
+        <div className="mt-2 rounded-md border border-gold/30 bg-gold/[0.06] px-2 py-1 text-[11px] leading-relaxed text-amber-100">{m.sample_warning}</div>
+      )}
       <div className="mt-3 grid grid-cols-3 gap-x-3 gap-y-2.5">
         <Stat label="報酬" cls={pnlClass(m.return_pct)}>{m.return_pct === null ? '—' : fmtSigned(m.return_pct, 2, '%')}</Stat>
         <Stat label="最大回撤" cls={m.max_drawdown_pct ? 'text-down' : 'text-slate-100'}>{fmtNum(m.max_drawdown_pct, 2)}%</Stat>

@@ -384,6 +384,8 @@ def test_personas_upload_and_master_portfolio(client):
     m = next(x for x in masters if x["bot_id"] == bid)
     assert m["persona"]["name"] == "测试交易员" and m["running"] and m["start_equity"] == pytest.approx(5000, rel=0.01)
     assert m["plan"]["style_summary"] == "順勢" and m["curve"]
+    assert m["paper"] is True and "樣本太少" in m["sample_warning"]
+    assert up["meta"]["quality"]["checks"]
     client.post(f"/api/bots/{bid}/stop", headers=H)
 
     assert client.delete(f"/api/personas/{up['id']}", headers=H).status_code == 400  # 仍有組合在用

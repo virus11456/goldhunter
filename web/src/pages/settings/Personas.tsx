@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, hasFidelity, type FidelityReport, type Persona, type PersonaDetail } from '../../api'
+import { api, hasFidelity, type FidelityReport, type Persona, type PersonaDetail, type PersonaQuality } from '../../api'
 import { MarkdownLite } from '../../components/markdown'
 import { Card, Collapsible, Field, Icons, Modal, Skeleton, Spinner, useAction, useConfirm, useLoader, useToast } from '../../components/ui'
 import { fmtNum } from '../../lib/format'
@@ -159,6 +159,7 @@ function PersonaView({ p }: { p: PersonaDetail }) {
         )}
       </section>
 
+      {p.meta?.quality && <QualityView q={p.meta.quality} />}
       <SectionsInfo kept={p.meta?.kept_sections} dropped={p.meta?.dropped_sections} />
       {p.meta?.truncated && (
         <div className="rounded-lg border border-gold/30 bg-gold/[0.06] px-3 py-2 text-xs text-amber-100">
@@ -367,6 +368,38 @@ function UploadModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   )
 }
 
+// ============================== upload quality ==============================
+const QUALITY_TEXT: Record<string, [string, string]> = {
+  good: ['檔案完整', 'badge-green'],
+  ok: ['檔案尚可', 'badge-blue'],
+  weak: ['檔案不足', 'badge-red'],
+}
+
+function QualityBadge({ q }: { q: PersonaQuality }) {
+  const [text, cls] = QUALITY_TEXT[q.level] ?? [q.level, 'badge-gray']
+  return <span className={`badge ${cls}`} title={`健檢 ${q.passed}/${q.total} 項通過`}>{text} {q.passed}/{q.total}</span>
+}
+
+function QualityView({ q }: { q: PersonaQuality }) {
+  return (
+    <section className="rounded-xl border border-line bg-[#101318] p-4">
+      <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-slate-100">
+        上傳健檢 <QualityBadge q={q} />
+      </div>
+      <p className="mb-3 text-xs text-muted">檢查檔案結構與交易相關度（不呼叫 AI、不花錢）。大師組合的表現取決於這份檔案的品質。</p>
+      <ul className="space-y-1.5 text-xs">
+        {q.checks.map((c) => (
+          <li key={c.key} className="flex items-start gap-2">
+            <span className={c.ok ? 'text-up' : 'text-down'}>{c.ok ? '✓' : '✗'}</span>
+            <span className="text-slate-200">{c.label}</span>
+            {c.detail && <span className="text-muted">— {c.detail}</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 // ============================== persona card ==============================
 function PersonaCard({ p, onView, onEdit, onChanged, onPortfolio }: { p: Persona; onView: () => void; onEdit: () => void; onChanged: () => void; onPortfolio: () => void }) {
   const { busy, run } = useAction()
@@ -417,6 +450,7 @@ function PersonaCard({ p, onView, onEdit, onChanged, onPortfolio }: { p: Persona
       {p.summary && <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-slate-400">{p.summary}</p>}
       <div className="mb-3 mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1">
         <PersonaStatusBadge p={p} />
+        {p.meta?.quality && <QualityBadge q={p.meta.quality} />}
         <span className="text-[11px] text-muted">組合：{p.used_by_bots} 個</span>
       </div>
       <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t border-line pt-3">

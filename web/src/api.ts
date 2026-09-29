@@ -631,7 +631,17 @@ export interface PersonaMeta {
   filename?: string
   kept_sections?: string[]
   dropped_sections?: string[]
+  /** 上傳健檢（結構與交易相關度，不呼叫 AI） */
+  quality?: PersonaQuality | null
   [k: string]: unknown
+}
+
+export interface PersonaQuality {
+  level: 'good' | 'ok' | 'weak' | string
+  passed: number
+  total: number
+  trading_terms: number
+  checks: { key: string; label: string; ok: boolean; detail: string }[]
 }
 
 export interface Persona {
@@ -782,6 +792,10 @@ export interface PortfolioResult {
 }
 
 export interface MasterPortfolio {
+  days?: number
+  paper?: boolean | null
+  /** 樣本太少時的提醒（天數、平倉筆數不足） */
+  sample_warning?: string | null
   bot_id: number
   name: string
   running: boolean

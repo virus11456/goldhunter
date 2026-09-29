@@ -40,6 +40,54 @@ class FidelityInfo(BaseModel):
     summary: str = ""
 
 
+class QualityCheck(BaseModel):
+    key: str
+    label: str
+    ok: bool
+    detail: str = ""
+
+
+class Quality(BaseModel):
+    """上傳健檢：不花錢、不呼叫 AI，只看檔案結構與交易相關度"""
+
+    level: str  # good / ok / weak
+    passed: int
+    total: int
+    checks: list[QualityCheck]
+    trading_terms: int
+
+
+TRADING_TERMS = ("交易", "止损", "止損", "仓位", "倉位", "部位", "风险", "風險", "趋势", "趨勢", "做多", "做空", "杠杆", "槓桿",
+                 "投机", "投機", "价格", "價格", "市场", "市場", "买入", "買入", "卖出", "賣出", "亏损", "虧損", "回撤")
+
+
+def assess_quality(profile: str, kept: list[str], fidelity: FidelityInfo | None, truncated: bool) -> Quality:
+    def has(*words: str) -> bool:
+        return any(any(w.lower() in t.lower() for w in words) for t in kept)
+
+    terms = sum(profile.count(t) for t in TRADING_TERMS)
+    checks = [
+        QualityCheck(key="models", label="核心心智模型", ok=has("心智模型"),
+                     detail="" if has("心智模型") else "找不到「核心心智模型」段落"),
+        QualityCheck(key="rules", label="決策啟發式 / 決策規則", ok=has("决策", "決策"),
+                     detail="" if has("决策", "決策") else "找不到決策規則，AI 較難照他的方式下判斷"),
+        QualityCheck(key="anti", label="反模式 / 反例", ok=has("反模式", "反例"),
+                     detail="" if has("反模式", "反例") else "找不到反模式，AI 不知道他「絕對不做」什麼"),
+        QualityCheck(key="bounds", label="誠實邊界", ok=has("诚实边界", "誠實邊界", "局限"),
+                     detail="" if has("诚实边界", "誠實邊界", "局限") else "找不到誠實邊界，AI 可能在他不擅長的領域亂套框架"),
+        QualityCheck(key="trading", label="交易相關度", ok=terms >= 15,
+                     detail=f"交易 / 風險相關詞出現 {terms} 次" + ("" if terms >= 15 else
+                             "，偏少：可能是一般商業或人生思維。建議在女媧蒸餾時加上「聚焦他的交易與風險管理思維」")),
+        QualityCheck(key="fidelity", label="保真度評分卡", ok=fidelity is not None,
+                     detail=f"{fidelity.score}/100 · {fidelity.grade}" if fidelity else "沒有附 FIDELITY.md，無法確認像不像本人"),
+        QualityCheck(key="length", label="檔案完整", ok=not truncated,
+                     detail="內容過長已截斷，後段沒有送給 AI" if truncated else ""),
+    ]
+    passed = sum(c.ok for c in checks)
+    level = "good" if passed == len(checks) else ("ok" if passed >= len(checks) - 2 else "weak")
+    return Quality(level=level, passed=passed, total=len(checks), checks=checks, trading_terms=terms)
+
+
 class ParsedPersona(BaseModel):
     name: str
     description: str
@@ -50,6 +98,7 @@ class ParsedPersona(BaseModel):
     fidelity: FidelityInfo | None
     files: list[str]
     truncated: bool = False
+    quality: Quality | None = None
 
 
 def _frontmatter(text: str) -> tuple[dict, str]:
@@ -160,4 +209,5 @@ def parse_nuwa(filename: str, data: bytes, fidelity_text: str | None = None) -> 
         raise ValueError("內容太短，不像女媧蒸餾出的完整人物檔案（至少需要心智模型與決策啟發式）")
     return ParsedPersona(name=name, description=meta.get("description", "")[:600], profile=profile,
                          raw_skill=skill[1][:200_000], kept_sections=kept, dropped_sections=dropped,
-                         fidelity=fidelity, files=[f[0] for f in files][:100], truncated=truncated)
+                         fidelity=fidelity, files=[f[0] for f in files][:100], truncated=truncated,
+                         quality=assess_quality(profile, kept, fidelity, truncated))
