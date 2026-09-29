@@ -34,6 +34,8 @@ def persona_out(p: Persona, s: Session, full: bool = False) -> dict:
     if not full:
         d["meta"] = {k: v for k, v in (p.meta or {}).items() if k != "raw_skill"}
     d["status_label"] = STATUS_LABEL.get(p.status, p.status)
+    if p.status == "draft" and not (p.fidelity or {}).get("score"):
+        d["status_label"] = "未附保真度評分"
     d["paper_progress"] = persona_progress(p, s)
     d["profile_chars"] = len(p.profile or "")
     d["used_by_bots"] = len(_bots_using(p, s, paper_only=False))
