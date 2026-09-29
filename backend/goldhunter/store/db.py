@@ -81,6 +81,8 @@ class Bot(SQLModel, table=True):
     entry: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # 此 Bot 專屬的策略參數覆寫（AI 參數微調套用在這裡，不影響其他 Bot）
     params_override: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # 止損狀態（重啟後接續）：{"crypto:BTC/USDT:perp": {"stop_loss", "take_profit", "order_id", "order_price", "order_qty"}}
+    stop_state: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     status: str = "stopped"  # stopped / running / error
     # TradingView Webhook 驗證密語（每個 Bot 各自一組）
     webhook_secret: str = Field(default_factory=lambda: secrets.token_urlsafe(16))

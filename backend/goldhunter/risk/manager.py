@@ -26,6 +26,8 @@ class RiskConfig(BaseModel):
     allow_pyramiding: bool = False  # 同方向是否允許加碼
     max_positions: int = Field(default=0, ge=0, description="最多同時持有幾個標的；0＝不限")
     long_only: bool = False  # 只做多（例如價值投資風格的大師）
+    # 實盤帳戶：在交易所掛「只減倉」的條件止損單，Bot 停止、主機當機或斷網時持倉仍有保護
+    exchange_stop: bool = True
 
 
 class RiskResult(BaseModel):

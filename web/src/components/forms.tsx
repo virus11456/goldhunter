@@ -201,6 +201,7 @@ const RISK_FIELDS: { key: RiskKey; label: string; kind: 'num' | 'bool'; hint?: s
   { key: 'max_positions', label: '最多同時持有標的數', kind: 'num', step: 1, hint: '0＝不限' },
   { key: 'allow_pyramiding', label: '允許加碼', kind: 'bool', hint: '同方向已有持倉時仍可再開' },
   { key: 'long_only', label: '只做多', kind: 'bool', hint: '不開空單' },
+  { key: 'exchange_stop', label: '交易所掛止損單', kind: 'bool', hint: '實盤帳戶：Bot 停止或主機斷線時持倉仍受保護' },
 ]
 
 export function RiskForm({ value, defaults, onChange }: { value: Partial<RiskConfig>; defaults: RiskConfig; onChange: (v: Partial<RiskConfig>) => void }) {

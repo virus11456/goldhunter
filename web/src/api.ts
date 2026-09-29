@@ -150,6 +150,7 @@ export interface RiskConfig {
   allow_pyramiding: boolean
   max_positions?: number // 最多同時持有幾個標的；0＝不限
   long_only?: boolean // 只做多
+  exchange_stop?: boolean // 實盤帳戶在交易所掛條件止損單
 }
 
 /** 進場方式（backend analysis/config.py EntryConfig） */
@@ -425,6 +426,10 @@ export interface PositionOut {
   mark_price: number | null
   stop_loss: number | null
   take_profit: number | null
+  /** 掛在交易所的條件止損單（實盤帳戶） */
+  exchange_stop?: { order_id: string; price: number; quantity: number } | null
+  exchange_stop_enabled?: boolean
+  exchange_stop_error?: string | null
 }
 
 export interface PositionsResponse {

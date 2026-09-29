@@ -223,6 +223,10 @@ async def bot_positions(bot_id: int):
         d["mark_price"] = runner.last_price.get(p.instrument)
         lv = runner.stops.get(p.instrument)
         d["stop_loss"], d["take_profit"] = (lv.stop_loss, lv.take_profit) if lv else (None, None)
+        xs = runner.xstops.get(p.instrument)
+        d["exchange_stop"] = ({"order_id": xs.order_id, "price": xs.price, "quantity": xs.quantity} if xs else None)
+        d["exchange_stop_enabled"] = runner.use_exchange_stop
+        d["exchange_stop_error"] = runner.xstop_error.get(p.instrument)
         out.append(d)
     return {"running": runner.running, "positions": out, "balance": balance.model_dump()}
 

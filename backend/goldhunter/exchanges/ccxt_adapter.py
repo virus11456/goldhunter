@@ -157,6 +157,39 @@ class CCXTExchange(ExchangeAdapter):
             raw={k: o.get(k) for k in ("id", "status", "average", "filled", "timestamp")},
         )
 
+    # ---- 交易所端條件止損單 ----
+    supports_stop_orders = True
+    # 取消條件單時各交易所需要的參數（Binance / OKX 的條件單走另一組 API）
+    _STOP_CANCEL_PARAMS = {"binance": {"trigger": True}, "okx": {"trigger": True}}
+
+    async def place_stop_order(self, instrument: Instrument, side: Side, quantity: float, stop_price: float) -> str:
+        await self._ensure_markets()
+        sym = exchange_symbol(self.id, instrument)
+        cs = self._contract_size(sym)
+        stop = float(self.client.price_to_precision(sym, stop_price)) if self._markets_loaded and sym in (
+            self.client.markets or {}) else stop_price
+        params = {"stopLossPrice": stop, "reduceOnly": True}
+        # Hyperliquid 市價單需要參考價計算滑價上限，用止損價
+        price = stop if self.id == "hyperliquid" else None
+        o = await self.client.create_order(sym, "market", side.value, quantity / cs, price, params)
+        oid = o.get("id")
+        if not oid:
+            raise RuntimeError(f"交易所未回傳止損單編號：{o}")
+        return str(oid)
+
+    async def cancel_stop_order(self, instrument: Instrument, order_id: str) -> None:
+        await self._ensure_markets()
+        sym = exchange_symbol(self.id, instrument)
+        params = dict(self._STOP_CANCEL_PARAMS.get(self.id, {}))
+        try:
+            await self.client.cancel_order(order_id, sym, params)
+        except ccxt.OrderNotFound:
+            pass  # 已觸發或已被取消
+        except ccxt.BaseError:
+            if not params:
+                raise
+            await self.client.cancel_order(order_id, sym)  # 有些帳戶類型不用條件單參數
+
     async def perp_volumes(self) -> list[tuple[str, float]]:
         await self._ensure_markets()
         quote = "USDC" if self.id == "hyperliquid" else "USDT"

@@ -7,6 +7,8 @@
     C. 參數微調：定期提出新參數，樣本外回測較佳才套用（或等你確認）
 - 對照組（baseline）：同一策略「不經 AI」的訊號在模擬帳本上同步執行，用來比較 AI 的貢獻
 - 止損 / 止盈由引擎監控：每次輪詢檢查最新價，觸發即市價平倉
+- 實盤帳戶另外在交易所掛「只減倉」條件止損單（risk.exchange_stop），Bot 停止、主機當機或斷網時仍有保護；
+  止損價或持倉數量改變就撤掉舊單重掛，止損狀態存進資料庫，重啟後接續
 - TradingView / 手動訊號走同一條 handle_decision 流程，同樣必須通過風控
 """
 
@@ -25,7 +27,7 @@ from goldhunter.analysis.entry import EntryAnalysis, analyze_entry, strategy_sig
 from goldhunter.copilot.config import CopilotConfig
 from goldhunter.copilot.review import manage_position, review_signal
 from goldhunter.copilot.tune import tune_strategy
-from goldhunter.core.models import Action, Decision, Instrument, OrderStatus, Position
+from goldhunter.core.models import Action, Decision, Instrument, OrderStatus, Position, Side
 from goldhunter.engine.universe import UniverseRules, pick, to_instruments
 from goldhunter.exchanges.base import ExchangeAdapter
 from goldhunter.exchanges.paper import PaperExchange
@@ -57,6 +59,14 @@ class PendingEntry(BaseModel):
 class StopLevels(BaseModel):
     stop_loss: float | None = None
     take_profit: float | None = None
+
+
+class ExchangeStop(BaseModel):
+    """掛在交易所的條件止損單"""
+
+    order_id: str
+    price: float
+    quantity: float
 
 
 def _aware(dt: datetime) -> datetime:
@@ -109,6 +119,9 @@ class BotRunner:
         self.universe_at: datetime | None = None
         self.risk_state = RiskState()
         self.stops: dict[Instrument, StopLevels] = {}
+        self.xstops: dict[Instrument, ExchangeStop] = {}
+        self.xstop_error: dict[Instrument, str] = {}
+        self._load_stop_state()
         self.last_bar: dict[Instrument, int] = {}
         self.last_price: dict[Instrument, float] = {}
         self.last_manage: dict[Instrument, datetime] = {}
@@ -185,6 +198,7 @@ class BotRunner:
                 await self._check_stops(inst, price)
                 await self._check_pending(inst, candles)
 
+                await self._check_exchange_stop_fired(inst)
                 closed = candles[:-1]  # 最後一根尚未收盤
                 pos = await self._position(inst)
                 if pos and self.copilot_active and self.copilot.manage:
@@ -206,6 +220,9 @@ class BotRunner:
                     await self._baseline_apply(decision, price)
                 await self._process_signal(decision, ctx, price, ai_result)
 
+            for inst in list(dict.fromkeys([*self.instruments, *self.stops, *self.xstops])):
+                await self._sync_exchange_stop(inst)
+            self._persist_stop_state()
             balance = await self.exchange.fetch_balance()
             self._save(EquitySnapshot(bot_id=self.bot_id, equity=balance.total,
                                       baseline_equity=self.baseline.equity() if self.baseline else None))
@@ -216,7 +233,10 @@ class BotRunner:
         async with self._lock:
             price = await self.exchange.fetch_price(decision.instrument)
             self.last_price[decision.instrument] = price
-            return await self._handle(decision, price=price)
+            entry = await self._handle(decision, price=price)
+            await self._sync_exchange_stop(decision.instrument)
+            self._persist_stop_state()
+            return entry
 
     # ---------- 標的範圍 ----------
     async def _refresh_universe(self) -> None:
@@ -467,6 +487,99 @@ class BotRunner:
             return
         if hit := _hit_stop(pos, lv, price):
             await self._handle(Decision(instrument=inst, action=Action.CLOSE, reasoning=hit, source="stop"), price=price)
+
+    # ---------- 交易所端條件止損單 ----------
+    @property
+    def use_exchange_stop(self) -> bool:
+        return self.risk.exchange_stop and self.exchange.supports_stop_orders
+
+    async def _check_exchange_stop_fired(self, inst: Instrument) -> None:
+        """引擎以為還有持倉、交易所上卻已經沒有：交易所止損單觸發了（或在交易所手動平倉）"""
+        if inst not in self.xstops:
+            return
+        if await self._position(inst) is not None:
+            return
+        xs = self.xstops.pop(inst)
+        self.stops.pop(inst, None)
+        self._save(DecisionLog(
+            bot_id=self.bot_id, instrument=str(inst), source="exchange_stop", action="close",
+            decision={"stop_loss": xs.price, "order_id": xs.order_id}, approved=True,
+            reasons=[f"交易所止損單已觸發（止損價 {xs.price:.6g}），或持倉已在交易所被平倉；成交明細請見交易所"]))
+
+    async def _sync_exchange_stop(self, inst: Instrument) -> None:
+        """讓交易所上的止損單＝目前持倉數量 × 目前止損價；不一致就撤掉重掛"""
+        if not self.use_exchange_stop:
+            return
+        pos = await self._position(inst)
+        lv = self.stops.get(inst)
+        want = (lv.stop_loss, abs(pos.quantity)) if pos and lv and lv.stop_loss else None
+        cur = self.xstops.get(inst)
+        if cur and want and abs(cur.price - want[0]) <= 1e-9 * max(1.0, want[0]) \
+                and abs(cur.quantity - want[1]) <= 1e-9 * max(1.0, want[1]):
+            return
+        if not cur and not want:
+            return
+        if cur:
+            try:
+                await self.exchange.cancel_stop_order(inst, cur.order_id)
+            except Exception as e:
+                log.warning("bot %s 撤銷交易所止損單失敗：%s", self.bot_id, e)
+                self.xstop_error[inst] = f"撤銷舊止損單失敗：{type(e).__name__}: {e}"
+                return  # 撤不掉就不重掛，避免同時兩張止損單；下一輪再試
+            self.xstops.pop(inst, None)
+        if want and pos:
+            side = Side.SELL if pos.quantity > 0 else Side.BUY
+            try:
+                oid = await self.exchange.place_stop_order(inst, side, want[1], want[0])
+                self.xstops[inst] = ExchangeStop(order_id=oid, price=want[0], quantity=want[1])
+                self.xstop_error.pop(inst, None)
+            except Exception as e:
+                msg = f"{type(e).__name__}: {e}"
+                if self.xstop_error.get(inst) != msg:  # 同樣的錯誤只記一次
+                    self._save(DecisionLog(
+                        bot_id=self.bot_id, instrument=str(inst), source="exchange_stop", action="stop_order",
+                        decision={"stop_loss": want[0], "quantity": want[1]}, approved=False,
+                        reasons=[f"交易所止損單掛單失敗，改由平台盯盤（Bot 停止時沒有保護）：{msg}"]))
+                self.xstop_error[inst] = msg
+
+    def _load_stop_state(self) -> None:
+        try:
+            with Session(get_engine()) as s:
+                bot = s.get(Bot, self.bot_id)
+                state = dict(bot.stop_state or {}) if bot else {}
+        except Exception:
+            return
+        for key, v in state.items():
+            try:
+                inst = Instrument.parse(key)
+            except ValueError:
+                continue
+            if v.get("stop_loss") is not None or v.get("take_profit") is not None:
+                self.stops[inst] = StopLevels(stop_loss=v.get("stop_loss"), take_profit=v.get("take_profit"))
+            if v.get("order_id"):
+                self.xstops[inst] = ExchangeStop(order_id=v["order_id"], price=v["order_price"],
+                                                 quantity=v["order_qty"])
+        self._persisted_state = state
+
+    def _persist_stop_state(self) -> None:
+        """止損狀態有變才寫入資料庫（重啟後接續盯盤，也知道交易所上掛著哪張止損單）"""
+        state: dict = {}
+        for inst in set(self.stops) | set(self.xstops):
+            lv, xs = self.stops.get(inst), self.xstops.get(inst)
+            state[str(inst)] = {"stop_loss": lv.stop_loss if lv else None, "take_profit": lv.take_profit if lv else None,
+                                "order_id": xs.order_id if xs else None, "order_price": xs.price if xs else None,
+                                "order_qty": xs.quantity if xs else None}
+        if state == getattr(self, "_persisted_state", None):
+            return
+        self._persisted_state = state
+        try:
+            with Session(get_engine()) as s:
+                if bot := s.get(Bot, self.bot_id):
+                    bot.stop_state = state
+                    s.add(bot)
+                    s.commit()
+        except Exception as e:
+            log.warning("bot %s 儲存止損狀態失敗：%s", self.bot_id, e)
 
     def _recent_pnls(self, n: int = 10) -> list[float]:
         with Session(get_engine()) as s:

@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
-from goldhunter.core.models import Balance, Candle, Instrument, Order, OrderRequest, Position
+from goldhunter.core.models import Balance, Candle, Instrument, Order, OrderRequest, Position, Side
 
 
 class Capabilities(BaseModel):
@@ -47,6 +47,16 @@ class ExchangeAdapter(ABC):
     async def place_order(self, req: OrderRequest) -> Order: ...
 
     async def cancel_order(self, order_id: str, instrument: Instrument) -> None:
+        raise NotImplementedError
+
+    # ---- 交易所端條件止損單（只減倉）----
+    supports_stop_orders: bool = False
+
+    async def place_stop_order(self, instrument: Instrument, side: Side, quantity: float, stop_price: float) -> str:
+        """掛條件止損單：價格觸及 stop_price 時以市價只減倉；回傳交易所訂單編號"""
+        raise NotImplementedError
+
+    async def cancel_stop_order(self, instrument: Instrument, order_id: str) -> None:
         raise NotImplementedError
 
     async def perp_volumes(self) -> list[tuple[str, float]]:

@@ -462,6 +462,12 @@ function PositionsPanel({ bot }: { bot: Bot }) {
                           <span className="text-down">{fmtPrice(p.stop_loss)}</span>
                           <span className="text-muted"> / </span>
                           <span className="text-up">{fmtPrice(p.take_profit)}</span>
+                          {p.stop_loss != null && (
+                            <div className={`text-[10px] ${p.exchange_stop ? 'text-up' : p.exchange_stop_error ? 'text-down' : 'text-muted'}`}
+                              title={p.exchange_stop_error ?? (p.exchange_stop ? `交易所訂單 ${p.exchange_stop.order_id}` : undefined)}>
+                              {p.exchange_stop ? '✓ 交易所已掛止損單' : p.exchange_stop_error ? '⚠ 交易所止損單失敗，平台盯盤中' : '平台盯盤（Bot 停止時無保護）'}
+                            </div>
+                          )}
                         </td>
                         <td className="r">
                           <button className="btn btn-danger btn-sm" onClick={() => close(p.instrument)} disabled={busy === `close-${p.instrument}`}>

@@ -465,3 +465,96 @@ def test_entry_analysis_endpoints(client, monkeypatch):
     e = client.get(f"/api/bots/{bot['id']}/entry-analysis?direction=short", headers=H).json()
     assert e["entry"]["mode"] == "market" and e["items"][0]["analysis"]["direction"] in ("long", "short")
     client.post(f"/api/bots/{bot['id']}/stop", headers=H)
+
+
+class StopFeed(FeedExchange):
+    """支援交易所端條件止損單的假交易所：記錄掛單 / 撤單"""
+
+    supports_stop_orders = True
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.stop_orders: dict[str, tuple] = {}
+        self.cancelled: list[str] = []
+        self.n = 0
+
+    async def fetch_candles(self, instrument, timeframe, limit=200):
+        window = self.all[max(0, self.i - limit): self.i]  # 不前進，價格固定，方便檢查
+        self.set_price(instrument, window[-1].close)
+        return window
+
+    async def place_stop_order(self, instrument, side, quantity, stop_price):
+        self.n += 1
+        oid = f"stop-{self.n}"
+        self.stop_orders[oid] = (str(instrument), side.value, quantity, stop_price)
+        return oid
+
+    async def cancel_stop_order(self, instrument, order_id):
+        self.stop_orders.pop(order_id, None)
+        self.cancelled.append(order_id)
+
+
+def test_exchange_stop_orders_follow_position(client, monkeypatch):
+    from goldhunter.core.models import Instrument
+    from goldhunter.store.db import Bot, get_engine
+
+    ex_holder = {}
+
+    def fake(acc, capital=None):
+        ex_holder["ex"] = StopFeed(make_candles(600, period=40, amp=15))
+        return ex_holder["ex"]
+
+    monkeypatch.setattr(manager_mod, "exchange_from_account", fake)
+    acc = client.post("/api/accounts", headers=H, json={"name": "p", "exchange_id": "binance"}).json()
+    st = client.post("/api/strategies", headers=H, json={"name": "tv", "kind": "tradingview"}).json()
+    bot = client.post("/api/bots", headers=H, json={
+        "name": "止損", "account_id": acc["id"], "strategy_id": st["id"], "symbols": ["crypto:BTC/USDT:perp"],
+        "timeframe": "1h", "interval_sec": 3600, "risk": {"allow_pyramiding": True, "max_total_exposure_pct": 500}}).json()
+    assert client.post(f"/api/bots/{bot['id']}/start", headers=H).status_code == 200
+    ex = ex_holder["ex"]
+    btc = "crypto:BTC/USDT:perp"
+    price = ex.all[ex.i - 1].close
+
+    def sig(**kw):
+        r = client.post(f"/api/bots/{bot['id']}/signal", headers=H, json={"instrument": btc, **kw})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    # 開倉 → 交易所掛一張「只減倉」止損單，數量＝持倉
+    sig(action="open_long", size_pct=10, leverage=2, stop_loss=round(price * 0.95, 2))
+    pos = ex.positions[Instrument.parse(btc)]
+    (oid, (_, side, qty, sp)), = ex.stop_orders.items()
+    assert side == "sell" and qty == pytest.approx(pos.quantity) and sp == pytest.approx(round(price * 0.95, 2))
+    # 加碼 → 撤掉舊單、依新數量重掛
+    sig(action="open_long", size_pct=10, leverage=2, stop_loss=round(price * 0.96, 2))
+    assert oid in ex.cancelled and len(ex.stop_orders) == 1
+    assert next(iter(ex.stop_orders.values()))[2] == pytest.approx(ex.positions[Instrument.parse(btc)].quantity)
+    positions = client.get(f"/api/bots/{bot['id']}/positions", headers=H).json()["positions"]
+    assert positions[0]["exchange_stop"]["price"] == pytest.approx(round(price * 0.96, 2))
+
+    # 重啟 Bot：止損狀態從資料庫接回，不會重複掛單
+    client.post(f"/api/bots/{bot['id']}/stop", headers=H)
+    from sqlmodel import Session
+    with Session(get_engine()) as s:
+        saved = s.get(Bot, bot["id"]).stop_state[btc]
+    assert saved["order_id"] in ex.stop_orders and saved["stop_loss"] == pytest.approx(round(price * 0.96, 2))
+    old = ex
+    monkeypatch.setattr(manager_mod, "exchange_from_account", lambda acc, capital=None: old)
+    assert client.post(f"/api/bots/{bot['id']}/start", headers=H).status_code == 200
+    runner = _tick(client, bot["id"], 1)
+    assert runner.stops[Instrument.parse(btc)].stop_loss == pytest.approx(round(price * 0.96, 2))
+    assert len(old.stop_orders) == 1 and old.n == 2
+
+    # 手動平倉 → 撤掉交易所止損單
+    sig(action="close")
+    assert not old.stop_orders
+
+    # 交易所止損單觸發（持倉在交易所消失）→ 記錄並停止盯盤
+    sig(action="open_long", size_pct=10, leverage=2, stop_loss=round(price * 0.95, 2))
+    old.positions.clear()
+    old.stop_orders.clear()
+    _tick(client, bot["id"], 1)
+    dec = client.get(f"/api/decisions?bot_id={bot['id']}", headers=H).json()
+    assert any(d["source"] == "exchange_stop" and "已觸發" in d["reasons"][0] for d in dec)
+    assert not runner.stops and not runner.xstops
+    client.post(f"/api/bots/{bot['id']}/stop", headers=H)
