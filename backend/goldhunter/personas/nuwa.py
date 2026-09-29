@@ -133,7 +133,9 @@ def parse_nuwa(filename: str, data: bytes, fidelity_text: str | None = None) -> 
     head, sections = _split_sections(body)
     title = re.search(r"^#\s+(.+)$", head, re.M)
     raw_name = (title.group(1) if title else meta.get("name", PurePosixPath(skill[0]).stem)).strip()
-    name = re.split(r"\s*[·|｜:：]\s*", raw_name)[0].strip() or raw_name
+    # 標題是「〈人名〉 · 思维操作系统」；人名本身可能含「·」（傑西·李佛摩），所以只切前後有空白的分隔符
+    name = re.split(r"\s+[·・|｜]\s+|\s*[|｜:：]\s*", raw_name)[0].strip() or raw_name
+    name = re.sub(r"\s*[·・]?\s*(思维操作系统|思維操作系統|思维框架|思維框架)$", "", name).strip() or name
     if name.endswith("-perspective"):
         name = name[: -len("-perspective")]
 

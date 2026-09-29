@@ -116,6 +116,13 @@ def test_parse_nuwa_errors_and_fallback():
     assert "趨勢交易心得" in p.profile and p.name == "我的筆記"
 
 
+def test_name_with_middle_dot():
+    text = SKILL_MD.replace("# 测试交易员 · 思维操作系统", "# 傑西·李佛摩 · 思维操作系统")
+    assert parse_nuwa("SKILL.md", text.encode()).name == "傑西·李佛摩"
+    text = SKILL_MD.replace("# 测试交易员 · 思维操作系统", "# 喬治·索羅斯思維操作系統")
+    assert parse_nuwa("SKILL.md", text.encode()).name == "喬治·索羅斯"
+
+
 def test_parse_fidelity_variants():
     assert parse_fidelity("總分 91 / 100").grade == "A"
     assert parse_fidelity("Total: 64/100 · Grade C").score == 64

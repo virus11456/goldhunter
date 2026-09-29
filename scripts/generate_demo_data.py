@@ -87,12 +87,13 @@ SERIES = {
     "BTC": walk(112_400, N_TICKS + 400, 0.0032, regime, seed=1),
     "ETH": walk(4_180, N_TICKS + 400, 0.0045, lambda i: math.sin(i / 25) * 0.0012, seed=2),
     "SOL": walk(208, N_TICKS + 400, 0.006, lambda i: 0.0006, seed=3),
+    "XRP": walk(2.84, N_TICKS + 400, 0.0055, lambda i: -0.0003 if i < 600 else 0.0007, seed=4),
 }
 
 
 class MultiFeed(PaperExchange):
-    def __init__(self):
-        super().__init__(initial_cash=10_000, fee_rate=0.0005, slippage=0.0002)
+    def __init__(self, cash=10_000):
+        super().__init__(initial_cash=cash, fee_rate=0.0005, slippage=0.0002)
         self.i = 300
 
     async def perp_volumes(self):
@@ -128,25 +129,21 @@ class DemoAI(AIProvider):
 
     async def complete_json(self, system, user, schema):
         r = random.random()
-        if "審查委員" in system:
-            return self._reviewer(system, user)
-        if "出題官" in system:
-            return self._res(FID_EXAM)
-        if "依序回答" in user:
-            return self._res({"answers": ["絕不攤平，錯了就認錯出場", "等待，盤整中什麼都不做", "止損放在關鍵點另一側",
-                                          "這是框架推斷，我沒有公開談過", "先用小部位試單，確認後加碼"]})
-        if "評分官" in system:
-            who = user.split("人物：")[1].split(chr(10))[0]
-            return self._res(FID_GRADES.get(who, FID_GRADES["_"]))
+        if "量化組合設計師" in system:
+            name = user.split("請替 ")[1].split(" 設計")[0]
+            return self._res(MASTER_BY_NAME[name]["plan"])
         if "AI 交易員" in system:
             r = self._trader(user)
             if "你的交易大腦：" in system:
                 name = system.split("你的交易大腦：")[1].split(chr(10))[0]
                 d = json.loads(r.raw_text)
-                if d["reasoning"] and not d["reasoning"].startswith("以"):
-                    d["reasoning"] = f"以{name}的角度，" + d["reasoning"]
+                go, wait = STYLE.get(name, ("趨勢成立", "沒有明確優勢"))
+                if d["action"] in ("open_long", "open_short"):
+                    d["reasoning"] = f"以{name}的角度：{go}。" + d["reasoning"]
+                elif d["action"] == "hold" and "觀望" in d["reasoning"]:
+                    d["reasoning"] = f"以{name}的角度：{wait}。"
                 r = AIResult(decision=d, raw_text=json.dumps(d, ensure_ascii=False), model=r.model,
-                             input_tokens=r.input_tokens, output_tokens=r.output_tokens)
+                             input_tokens=r.input_tokens + 6000, output_tokens=r.output_tokens)
             return r
         if "持倉管理員" in system:
             if r < 0.72:
@@ -209,17 +206,6 @@ class DemoAI(AIProvider):
         return AIResult(decision=d, raw_text=json.dumps(d, ensure_ascii=False), model=self.model,
                         input_tokens=random.randint(2000, 4000), output_tokens=random.randint(100, 400))
 
-    def _reviewer(self, system, user):
-        name = system.split("審查委員：")[1].split("。")[0]
-        rsi = float(user.split('"rsi14": ')[1].split(",")[0])
-        fr = "資金費率" in user and "0.0" in user
-        long = "open_long" in user
-        if (long and rsi > 60) or (not long and rsi < 40):
-            d = {"verdict": "veto", "reasoning": f"反過來想：RSI {rsi:.0f} 已經{'偏高' if long else '偏低'}，又用槓桿追價，典型的從眾加近因偏誤。這是蠢事，否決。"}
-        else:
-            d = {"verdict": "approve", "reasoning": "理由說得清楚、止損明確、部位不大，沒有明顯的心理偏誤。我沒什麼要補充的。"}
-        return self._res(d)
-
     def _trader(self, user):
         """模擬 AI 交易員：順勢為主，參考情緒與資金費率；多數時候觀望"""
         sym = user.split("## 商品")[1].strip().split("（")[0].split(":")[1].split("/")[0]
@@ -257,78 +243,173 @@ class DemoAI(AIProvider):
                         input_tokens=random.randint(3600, 5200), output_tokens=random.randint(110, 240))
 
     async def complete_text(self, system, user, max_tokens=16000):
-        if "人物研究員" in system:
-            return DISTILLED_PROFILE
         return PY_CONVERTED
 
 
-FID_EXAM = {"questions": [
-    {"type": "stance", "question": "虧損的部位要不要攤平？", "expected": "絕不攤平，只在獲利部位上加碼"},
-    {"type": "stance", "question": "盤整行情該怎麼做？", "expected": "等待方向明確，不在區間中間交易"},
-    {"type": "stance", "question": "止損怎麼設？", "expected": "固定虧損上限，錯了立刻出場"},
-    {"type": "out_of_scope", "question": "你怎麼看 AI 晶片股的估值？", "expected": "應標註為推斷並保留不確定性"},
-    {"type": "scenario", "question": "BTC 放量突破三週整理區上緣，資金費率中性，你怎麼做？", "expected": "小部位試單，止損設在整理區內"},
-]}
-FID_GRADES = {
-    "傑西·李佛摩": {"summary": "立場與風格都很像李佛摩；超範圍題有標註推斷", "dimensions": [
-        {"name": "立場一致性", "score": 27, "max": 30, "reason": "三題方向與細節都符合（不攤平、等待、固定止損）"},
-        {"name": "風格辨識度", "score": 16, "max": 20, "reason": "短句、關鍵點、最小阻力線等用語明顯"},
-        {"name": "邊緣誠實度", "score": 18, "max": 20, "reason": "AI 晶片題明確標註為框架推斷"},
-        {"name": "情境合理性", "score": 13, "max": 15, "reason": "突破試單、止損在整理區內，符合其方法"},
-        {"name": "結構完整度", "score": 12, "max": 15, "reason": "心智模型 5 個、決策規則 7 條、誠實邊界 3 條"}]},
-    "喬治·索羅斯": {"summary": "反身性框架掌握到位，但交易情境題的回答偏短線、不夠總經", "dimensions": [
-        {"name": "立場一致性", "score": 24, "max": 30, "reason": "反身性、易錯性立場正確；止損題細節略偏"},
-        {"name": "風格辨識度", "score": 15, "max": 20, "reason": "有「我可能是錯的」的語氣"},
-        {"name": "邊緣誠實度", "score": 17, "max": 20, "reason": "有標註推斷"},
-        {"name": "情境合理性", "score": 10, "max": 15, "reason": "應更強調流動性與政策面"},
-        {"name": "結構完整度", "score": 12, "max": 15, "reason": "結構完整"}]},
-    "查理·芒格": {"summary": "逆向思考與偏誤檢查非常到位，且誠實承認加密貨幣不在能力圈", "dimensions": [
-        {"name": "立場一致性", "score": 28, "max": 30, "reason": "反對槓桿、反對 FOMO 的立場一致"},
-        {"name": "風格辨識度", "score": 18, "max": 20, "reason": "極短句、乾燥幽默，一眼認出"},
-        {"name": "邊緣誠實度", "score": 19, "max": 20, "reason": "直接說放進太難的籃子"},
-        {"name": "情境合理性", "score": 11, "max": 15, "reason": "情境題選擇不交易，合乎其框架"},
-        {"name": "結構完整度", "score": 13, "max": 15, "reason": "完整"}]},
-    "_": {"summary": "鏈上行為證據充足，風格辨識度高", "dimensions": [
-        {"name": "立場一致性", "score": 24, "max": 30, "reason": "依鏈上紀錄推論的習慣一致"},
-        {"name": "風格辨識度", "score": 15, "max": 20, "reason": "短線、快進快出的語氣明顯"},
-        {"name": "邊緣誠實度", "score": 16, "max": 20, "reason": "有標註哪些是推斷"},
-        {"name": "情境合理性", "score": 12, "max": 15, "reason": "情境題做法與其持倉時間相符"},
-        {"name": "結構完整度", "score": 12, "max": 15, "reason": "完整"}]},
-}
-DISTILLED_PROFILE = """# 示範鏈上短線交易員 · 交易思維作業系統
+# ---------------- 投資大師：模擬使用者用女媧蒸餾好、上傳的檔案 ----------------
+def nuwa_skill(slug, name, quote, identity, models, rules, values, bounds):
+    """產生女媧格式的 SKILL.md（含對話用段落，上傳後會被捨棄）"""
+    ms = "\n".join(f"### 模型{i + 1}：{t}\n一句話：{d}\n" for i, (t, d) in enumerate(models))
+    rs = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(rules))
+    return f"""---
+name: {slug}-perspective
+description: |
+  {name}的思維操作系統。依公開著作、訪談與傳記提煉，聚焦交易與風險管理。
+---
 
-> 依公開貼文與 Hyperliquid 鏈上成交紀錄（最近 2,000 筆、約 90 天）提煉的框架推斷，非本人觀點。
+# {name} · 思維操作系統
+
+> {quote}
+
+## 角色扮演規則
+用第一人稱、以{name}的口吻回答；不要跳出角色。
+
+## 回答工作流（Agentic Protocol）
+遇到需要事實的問題，先上網搜尋最新資料再回答。
 
 ## 身份卡
-專做 BTC、ETH、SOL 永續合約的短線交易員，平均持倉 6 小時，勝率不到五成但賺大賠小。
+{identity}
 
 ## 核心心智模型
-1. **流動性獵殺**：價格常先掃掉明顯的止損區再反轉。應用：等假突破收回再進場。局限：趨勢日會被軋。
-2. **資金費率反指標**：資金費率極端時站在擁擠方的對面。局限：強趨勢中費率可以長期極端。
-3. **時段特性**：亞洲盤整理、美股開盤後波動最大。應用：主要在 UTC 13～16 點開倉。
+{ms}
+## 決策啟發式
+{rs}
 
-## 決策規則
-1. 單筆風險不超過帳戶 1%
-2. 只做成交量前 5 名的幣
-3. 假突破收回前高 / 前低才進場
-4. 獲利 2R 先平一半，其餘移動止損
-5. 連虧 3 筆當天停止交易
-
-## 在加密貨幣永續合約上的應用
-本身就是永續合約交易員，槓桿 3～5 倍，重視資金費率與未平倉量變化。
-
-## 反模式（絕不做）
-- 重大數據公布前開倉
-- 做小市值幣
-- 攤平
+## 價值觀與反模式
+{chr(10).join('- ' + v for v in values)}
 
 ## 誠實邊界
-- 行為依鏈上紀錄推論，無法得知每筆交易的真實理由
-- 在單邊大趨勢中表現差（常逆勢）
-- 樣本只有約 90 天
+{chr(10).join('- ' + b for b in bounds)}
+- 本檔案是依公開資料推論的思維框架，不代表本人觀點
 
-## 決策表達
-極短、數字化：「掃完 67.2k 收回，做多，止損 66.8k，目標 2R」。"""
+## 調研來源
+- 公開著作、訪談、傳記（略）
+"""
+
+
+def nuwa_fidelity(name, score, grade, dims, judge):
+    rows = "\n".join(f"| {n} | {s}/{mx} | {r} |" for n, s, mx, r in dims)
+    return f"""# {name} · 保真度評分卡
+
+測試日期：2026-09-20
+
+**總分：{score}/100 · 等級 {grade}**
+
+| 維度 | 得分 | 說明 |
+|---|---|---|
+{rows}
+
+> {judge}
+"""
+
+
+MASTERS = [
+    dict(slug="livermore", name="傑西·李佛摩", file="livermore-perspective.zip", score=86, grade="A",
+         quote="「賺大錢靠的是坐著等，不是頻繁交易。」",
+         identity="二十世紀初的投機之王，專做趨勢與關鍵點突破；曾多次破產又東山再起。",
+         models=[("最小阻力線", "價格沿阻力最小的方向走，只順著它交易"),
+                 ("關鍵點", "只在價格突破關鍵點時進場，其他時間等待"),
+                 ("試單加碼", "先小部位試單，對了才加碼，錯了立刻出場"),
+                 ("市場永遠是對的", "不和行情爭辯，錯了就認錯")],
+         rules=["突破前高且放量才做多，跌破前低才做空", "單筆虧損不超過資金 10%", "絕不攤平虧損部位",
+                "盤整區間中間不交易", "獲利部位讓它跑，用移動止損保護"],
+         values=["攤平是大忌", "聽消息交易是自殺", "過度交易是虧損的根源"],
+         bounds=["不懂現代衍生品與加密貨幣的結構", "盤整行情中表現差"],
+         dims=[("立場一致性", 27, 30, "不攤平、等待、固定止損三題都一致"), ("風格辨識度", 16, 20, "關鍵點、最小阻力線等用語明顯"),
+               ("邊緣誠實度", 18, 20, "超範圍題有標註推斷"), ("情境合理性", 13, 15, "突破試單、止損設在整理區內"),
+               ("結構完整度", 12, 15, "心智模型與決策規則完整")],
+         judge="立場與風格都很像李佛摩；超範圍題有標註推斷。",
+         plan={"suitable": True, "style_summary": "順勢突破，集中持有最強的 2 個幣",
+               "reason": "李佛摩只在關鍵點突破時進場、錯了立刻認錯，並且集中火力在領頭羊；所以用 4 小時線抓波段、只挑成交量最大的幣、最多持有 2 個標的，並用掛單等待回測突破點來改善盈虧比。",
+               "timeframe": "4h", "holding_period": "數天到數週",
+               "universe": {"mode": "rules", "top_n": 5, "exclude_meme": True, "include_only": [], "symbols": []},
+               "max_positions": 2, "position_pct": 20, "max_leverage": 3, "allow_short": True, "entry_mode": "smart",
+               "instructions": "只在突破前高（做多）或跌破前低（做空）時進場，盤整不做；止損設在關鍵點另一側，單筆虧損不超過 10%；絕不攤平，獲利後才加碼。"},
+         capital=10_000),
+    dict(slug="soros", name="喬治·索羅斯", file="soros-perspective.zip", score=78, grade="B",
+         quote="「重要的不是你對或錯，而是你對的時候賺多少、錯的時候賠多少。」",
+         identity="量子基金創辦人，以反身性理論與總經押注聞名，1992 年放空英鎊。",
+         models=[("反身性", "市場參與者的認知會改變基本面，形成自我強化的循環"),
+                 ("易錯性", "所有人的認知都有缺陷，包括自己"),
+                 ("泡沫階段", "辨識繁榮—蕭條循環走到哪個階段"),
+                 ("先投資再調查", "先建小部位，再邊觀察邊調整")],
+         rules=["看流動性與政策方向決定大方向", "在泡沫早期順勢做多，確認反轉時大舉做空", "發現自己錯了立刻反向",
+                "有把握時重倉", "只做流動性最好的市場"],
+         values=["堅持錯誤的觀點比犯錯更糟", "不做看不懂流動性的市場"],
+         bounds=["總經判斷需要時間驗證，短線訊號不準", "加密貨幣的反身性判斷屬框架推斷"],
+         dims=[("立場一致性", 24, 30, "反身性、易錯性立場正確"), ("風格辨識度", 15, 20, "有「我可能是錯的」的語氣"),
+               ("邊緣誠實度", 17, 20, "有標註推斷"), ("情境合理性", 10, 15, "應更強調流動性與政策面"),
+               ("結構完整度", 12, 15, "結構完整")],
+         judge="反身性框架掌握到位，交易情境題略偏短線。",
+         plan={"suitable": True, "style_summary": "總經驅動，重倉 BTC、ETH 雙向操作",
+               "reason": "索羅斯看流動性與政策面決定方向，只做流動性最好的市場，有把握時重倉、錯了立刻反向；所以用日線、只做 BTC 與 ETH，倉位較大、允許做空。",
+               "timeframe": "1d", "holding_period": "數週到數月",
+               "universe": {"mode": "list", "top_n": 10, "exclude_meme": True, "include_only": [], "symbols": ["BTC", "ETH"]},
+               "max_positions": 2, "position_pct": 30, "max_leverage": 2, "allow_short": True, "entry_mode": "market",
+               "instructions": "先判斷美元流動性與利率方向，再決定多空；在泡沫早期順勢、確認反轉時反手；看錯立刻平倉並反向；重大數據前降低部位。"},
+         capital=10_000),
+    dict(slug="ptj", name="保羅·都鐸·瓊斯", file="paul-tudor-jones-perspective.zip", score=81, grade="B",
+         quote="「最重要的原則是防守，而不是進攻。」",
+         identity="都鐸投資創辦人，1987 年股災前放空獲利；以嚴格風控與 200 日均線紀律著稱。",
+         models=[("防守第一", "先想會賠多少，再想會賺多少"), ("200 日均線", "價格在 200 日均線下方就不做多"),
+                 ("5:1 盈虧比", "只做潛在報酬是風險 5 倍的交易"), ("虧損時縮手", "連續虧損就降低部位")],
+         rules=["價格在長期均線下方不做多", "盈虧比不到 3 倍不進場", "連虧兩筆部位減半", "永遠設止損", "分散在幾個相關性低的標的"],
+         values=["不攤平", "不當英雄，不接落下的刀"],
+         bounds=["不擅長加密貨幣的極端波動", "偏好流動性高的市場"],
+         dims=[("立場一致性", 25, 30, "防守第一、均線紀律一致"), ("風格辨識度", 15, 20, "語氣務實"),
+               ("邊緣誠實度", 17, 20, "有標註推斷"), ("情境合理性", 12, 15, "盈虧比要求明確"), ("結構完整度", 12, 15, "完整")],
+         judge="風控紀律與盈虧比要求都很到位。",
+         plan={"suitable": True, "style_summary": "防守型趨勢組合，只做高盈虧比的機會",
+               "reason": "瓊斯強調防守第一、只做高盈虧比交易、價格在長期均線下方不做多；所以分散在 3 個主流幣、低槓桿、單一標的倉位小。",
+               "timeframe": "4h", "holding_period": "數天",
+               "universe": {"mode": "rules", "top_n": 4, "exclude_meme": True, "include_only": [], "symbols": []},
+               "max_positions": 3, "position_pct": 12, "max_leverage": 2, "allow_short": True, "entry_mode": "market",
+               "instructions": "價格在 EMA200 下方不做多；盈虧比不到 3 倍不進場；每筆必設止損；連虧兩筆後部位減半。"},
+         capital=10_000),
+    dict(slug="crypto-scalper", name="示範加密短線交易員", file="crypto-scalper-perspective.zip", score=74, grade="B",
+         quote="「流動性在哪裡，價格就往哪裡去。」",
+         identity="虛構的示範人物：依公開貼文與鏈上成交紀錄風格合成，專做主流幣短線。",
+         models=[("掃流動性", "價格先掃掉前高前低的止損單，再反向"), ("資金費率", "費率過高代表多單擁擠"),
+                 ("快進快出", "持倉以小時計，不過夜抱單")],
+         rules=["掃完前低收回才做多", "資金費率過高不追多", "止損固定 1R，目標 2R", "一天最多虧 3R 就停手"],
+         values=["不抱虧損單", "不追已經走完的行情"],
+         bounds=["行為依鏈上紀錄推論", "單邊大趨勢中表現差"],
+         dims=[("立場一致性", 22, 30, "依鏈上紀錄推論的習慣一致"), ("風格辨識度", 15, 20, "短線語氣明顯"),
+               ("邊緣誠實度", 15, 20, "有標註推斷"), ("情境合理性", 11, 15, "與持倉時間相符"), ("結構完整度", 11, 15, "完整")],
+         judge="短線風格辨識度高，但樣本期間較短。",
+         plan={"suitable": True, "style_summary": "主流幣短線，快進快出、多標的分散",
+               "reason": "這位交易員持倉以小時計、固定 1R 止損 2R 目標，偏好在掃完流動性後進場；所以用 1 小時線、分散 4 個標的、掛單等待回檔進場。",
+               "timeframe": "1h", "holding_period": "數小時到一天",
+               "universe": {"mode": "rules", "top_n": 6, "exclude_meme": True, "include_only": [], "symbols": []},
+               "max_positions": 4, "position_pct": 8, "max_leverage": 5, "allow_short": True, "entry_mode": "smart",
+               "instructions": "等價格掃過前高前低後收回再進場；止損 1R、目標 2R；資金費率過高不追多；單日虧損 3R 停手。"},
+         capital=5_000),
+    dict(slug="buffett", name="華倫·巴菲特", file="buffett-perspective.zip", score=88, grade="A",
+         quote="「第一條規則：不要賠錢。第二條規則：不要忘記第一條。」",
+         identity="波克夏·海瑟威董事長，價值投資代表人物，長期持有優質企業。",
+         models=[("能力圈", "只投資自己看得懂的東西"), ("安全邊際", "價格要明顯低於內在價值"), ("長期持有", "理想的持有期是永遠")],
+         rules=["不用槓桿", "看不懂的不碰", "別人貪婪時恐懼"],
+         values=["反對投機與槓桿", "加密貨幣不產生現金流"],
+         bounds=["對加密貨幣持否定態度", "不做短線與放空"],
+         dims=[("立場一致性", 28, 30, "反對槓桿立場一致"), ("風格辨識度", 18, 20, "語氣鮮明"),
+               ("邊緣誠實度", 19, 20, "明說不在能力圈"), ("情境合理性", 11, 15, "情境題選擇不交易"), ("結構完整度", 12, 15, "完整")],
+         judge="價值投資框架非常到位，也誠實表明加密貨幣不在能力圈。",
+         plan={"suitable": False, "style_summary": "最保守版本：只做多 BTC、1 倍、日線",
+               "reason": "巴菲特明確反對槓桿與投機，並認為加密貨幣不產生現金流、不在他的能力圈；這裡只給最保守的版本（1 倍、只做多、只做 BTC、低倉位），建議等美股 / 台股上線後再用他的思維。",
+               "timeframe": "1d", "holding_period": "數月以上",
+               "universe": {"mode": "list", "top_n": 10, "exclude_meme": True, "include_only": [], "symbols": ["BTC"]},
+               "max_positions": 1, "position_pct": 10, "max_leverage": 1, "allow_short": False, "entry_mode": "smart",
+               "instructions": "只在市場極度恐懼、價格明顯低於長期均線時小量做多，不用槓桿、不做空，長期持有。"},
+         capital=None),
+]
+MASTER_BY_NAME = {x["name"]: x for x in MASTERS}
+STYLE = {
+    "傑西·李佛摩": ("價格突破關鍵點、沿最小阻力線", "還在整理區中間，等關鍵點突破再動手"),
+    "喬治·索羅斯": ("美元流動性轉鬆、市場認知正在自我強化", "流動性方向不明，先不下注"),
+    "保羅·都鐸·瓊斯": ("價格在長期均線上方、盈虧比超過 3 倍", "盈虧比不到 3 倍，防守第一，不做"),
+    "示範加密短線交易員": ("掃完前低的止損後收回", "資金費率偏高、沒有掃流動性的訊號，不追"),
+}
+
 
 PINE = """//@version=5
 strategy("通道突破", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
@@ -375,8 +456,8 @@ ai = DemoAI()
 feeds = {}
 
 
-def fake_exchange(acc):
-    ex = MultiFeed()
+def fake_exchange(acc, capital=None):
+    ex = MultiFeed(capital or acc.paper_cash or 10_000)
     feeds[len(feeds)] = ex
     return ex
 
@@ -389,8 +470,11 @@ backtest_routes.provider_from_config = lambda cfg: DemoAI(cfg.model or "claude-o
 
 async def fetch_history(exchange_id, inst, tf, s, e):
     base = inst.symbol.split("/")[0]
-    return walk({"BTC": 58_000, "ETH": 2_400, "SOL": 95}.get(base, 100), 2200, 0.009,
-                lambda i: 0.0007 if i < 900 else (-0.0004 if i < 1400 else 0.0009), step_ms=3_600_000, seed=11)
+    cs = walk(100, 2200, 0.009, lambda i: 0.0007 if i < 900 else (-0.0004 if i < 1400 else 0.0009),
+              step_ms=3_600_000, seed=11)
+    k = SERIES.get(base, SERIES["BTC"])[N_TICKS + 299].close / cs[-1].close  # 最後價格對齊監控頁的行情
+    return [Candle(ts=c.ts, open=c.open * k, high=c.high * k, low=c.low * k, close=c.close * k, volume=c.volume)
+            for c in cs]
 
 
 backtest_routes.fetch_history = fetch_history
@@ -400,6 +484,10 @@ from goldhunter.api import persona_routes  # noqa: E402
 
 persona_routes.datetime = SimDT
 persona_routes.provider_from_config = lambda cfg: DemoAI(cfg.model or "claude-opus-5")
+from goldhunter.api import analysis_routes  # noqa: E402
+
+analysis_routes.fetch_history = fetch_history
+analysis_routes.provider_from_config = lambda cfg: DemoAI(cfg.model or "claude-opus-5")
 
 
 async def tv_csv_for(code_md: str) -> str:
@@ -496,21 +584,41 @@ with TestClient(app) as c:
         "name": "RSI 背離（Pine 轉換）", "ai_model_id": claude["id"],
         "pine": "//@version=5\nstrategy(\"RSI 背離\")\nr = ta.rsi(close, 14)\npl = ta.pivotlow(r, 5, 5)\n// ...背離判斷..."})
     tune_ranges = {"fast": [5, 20], "slow": [20, 60]}
-    personas = {p["slug"]: p for p in G("/personas") if p.get("slug")}
-    for slug in ("livermore", "soros", "munger"):
-        P(f"/personas/{personas[slug]['id']}/fidelity", {"ai_model_id": claude["id"]})
-    fx["persona_estimate"] = P("/personas/estimate", {"name": "示範鏈上短線交易員", "ai_model_id": claude["id"],
-                                                      "depth": "standard"})
-    fx["distill_result"] = P("/personas/distill", {"name": "示範鏈上短線交易員", "ai_model_id": claude["id"],
-                                                   "depth": "quick", "role": "trader", "markets": ["crypto"]})
-    b0 = P("/bots", {"name": "AI 交易員 · 李佛摩 × 芒格審查", "account_id": acc1["id"], "ai_model_id": claude["id"],
+    import base64
+    import io
+    import zipfile
+
+    def zipped(mst):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            d = mst["file"].removesuffix(".zip")
+            z.writestr(f"{d}/SKILL.md", nuwa_skill(mst["slug"], mst["name"], mst["quote"], mst["identity"],
+                                                   mst["models"], mst["rules"], mst["values"], mst["bounds"]))
+            z.writestr(f"{d}/FIDELITY.md", nuwa_fidelity(mst["name"], mst["score"], mst["grade"], mst["dims"],
+                                                         mst["judge"]))
+            z.writestr(f"{d}/references/research.md", "## 調研\n公開資料摘要（略）")
+        return base64.b64encode(buf.getvalue()).decode()
+
+    master_bots = []
+    for mst in MASTERS:
+        pm = P("/personas/upload", {"filename": mst["file"], "content_base64": zipped(mst)})
+        plan = P(f"/personas/{pm['id']}/portfolio-plan", {"ai_model_id": claude["id"]})
+        if mst["capital"]:
+            r = P(f"/personas/{pm['id']}/portfolio", {"ai_model_id": claude["id"], "account_id": acc1["id"],
+                                                      "plan": plan, "capital": mst["capital"], "start": False})
+            master_bots.append(r["bot_id"])
+    # 未達標示範：沒有附評分卡的上傳
+    low = MASTERS[3]
+    P("/personas/upload", {"filename": "SKILL.md", "content_base64": base64.b64encode(nuwa_skill(
+        "my-trader", "我的交易筆記", "「只做看得懂的行情。」", "使用者自己整理的交易習慣。", low["models"], low["rules"],
+        low["values"], low["bounds"]).encode()).decode()})
+    b0 = P("/bots", {"name": "AI 交易員 · 主流幣", "account_id": acc1["id"], "ai_model_id": claude["id"],
                      "symbols": [], "universe": {"mode": "rules", "top_n": 3, "exclude_meme": True},
                      "timeframe": "1h", "interval_sec": 60, "risk": {"max_leverage": 3, "max_position_pct": 15},
+                     "entry": {"mode": "smart", "max_wait_bars": 4, "skip_negative_ev": True},
                      "copilot": {"review": False, "manage": False, "tune": False, "event_blackout_min": 60},
                      "ai_trader": {"instructions": "順勢交易為主，不逆勢抄底；重大數據公布前不開新倉；單筆最多 15% 資金、最多 3 倍槓桿。",
-                                   "reference_strategy_id": st_ma["id"], "min_confidence": 0.6,
-                                   "persona_id": personas["livermore"]["id"],
-                                   "reviewer_ids": [personas["munger"]["id"]], "veto_rule": "any"}})
+                                   "reference_strategy_id": st_ma["id"], "min_confidence": 0.6}})
     b1 = P("/bots", {"name": "BTC 均線 + AI 審核", "account_id": acc1["id"], "strategy_id": st_ma["id"],
                      "ai_model_id": claude["id"], "symbols": ["crypto:BTC/USDT:perp"], "timeframe": "15m",
                      "interval_sec": 60, "risk": {"max_leverage": 3, "max_position_pct": 25},
@@ -528,7 +636,9 @@ with TestClient(app) as c:
 
     for b in (b1, b2, b3):
         P(f"/bots/{b['id']}/start")
-    runners = {b["id"]: m.manager.runners[b["id"]] for b in (b1, b2, b3)}
+    for bid in master_bots:
+        P(f"/bots/{bid}/start")
+    runners = {bid: m.manager.runners[bid] for bid in [b1["id"], b2["id"], b3["id"], *master_bots]}
     for r in runners.values():
         r.interval_sec = 10**7  # 背景迴圈只跑第一次，之後由這支程式手動推進時間
     for r in runners.values():
@@ -586,6 +696,14 @@ with TestClient(app) as c:
     fx["backtest_run"] = bt_main
     fx["personas"] = G("/personas")
     fx["persona_detail"] = {str(p["id"]): G(f"/personas/{p['id']}") for p in fx["personas"]}
+    fx["masters"] = G("/masters")
+    fx["entry_analysis"] = {str(bid): G(f"/bots/{bid}/entry-analysis") for bid in runners}
+    fx["analysis_entry"] = P("/analysis/entry", {"strategy_id": st_ma["id"], "symbol": "crypto:BTC/USDT:perp",
+                                                 "timeframe": "1h"})
+    fx["analysis_entry_long"] = P("/analysis/entry", {"strategy_id": st_ma["id"], "symbol": "crypto:BTC/USDT:perp",
+                                                      "timeframe": "1h", "direction": "long"})
+    fx["analysis_entry_short"] = P("/analysis/entry", {"strategy_id": st_ma["id"], "symbol": "crypto:BTC/USDT:perp",
+                                                       "timeframe": "1h", "direction": "short"})
     fx["intel_settings"] = G("/intel/settings")
     fx["intel_snapshot"] = G("/intel/snapshot?symbol=crypto:BTC/USDT:perp&exchange_id=binance")
     fx["generated_at"] = REAL_NOW.isoformat()
@@ -597,4 +715,5 @@ print("trades", len(fx["trades"]), "decisions", len(fx["decisions"]), "tuning", 
 from collections import Counter  # noqa: E402
 
 print(Counter((d["source"], d["action"], d["approved"]) for d in fx["decisions"]).most_common(20))
+print("masters", [(x["name"], x["return_pct"], x["trades"]) for x in fx["masters"]])
 print("size KB", os.path.getsize(OUT) // 1024)
