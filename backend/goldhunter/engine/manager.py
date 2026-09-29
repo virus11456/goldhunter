@@ -14,6 +14,7 @@ from goldhunter.core.secrets import decrypt
 from goldhunter.engine.bot import BotRunner
 from goldhunter.exchanges.base import ExchangeAdapter
 from goldhunter.exchanges.registry import build_exchange
+from goldhunter.personas.attach import attach_personas
 from goldhunter.risk.manager import RiskConfig
 from goldhunter.store.db import AIModelConfig, Bot, ExchangeAccount, StrategyConfig, get_engine
 from goldhunter.strategies.lifecycle import check_usable
@@ -54,15 +55,17 @@ class BotManager:
             params = {**(strat_cfg.params or {}), **(bot.params_override or {})}
             strategy = build_strategy(strat_cfg.kind, params, strat_cfg.code, ai=ai)
             attach_reference(strategy, session, paper_account=acc.paper)
+            attach_personas(strategy, session, paper_account=acc.paper)
             if strategy.uses_ai and ai is None:
                 raise ValueError("此策略需要 AI 模型，請在 Bot 設定中選擇")
-        if not bot.symbols:
+        if not bot.symbols and (bot.universe or {}).get("mode") != "rules":
             raise ValueError("Bot 至少需要一個交易對")
         return BotRunner(
             bot_id=bot.id, name=bot.name, exchange=exchange_from_account(acc), strategy=strategy,  # type: ignore[arg-type]
             instruments=[Instrument.parse(s) for s in bot.symbols], timeframe=bot.timeframe,
             interval_sec=bot.interval_sec, risk=RiskConfig(**(bot.risk or {})), ai=ai,
             copilot=CopilotConfig(**(bot.copilot or {})), exchange_id=acc.exchange_id, strategy_id=strat_cfg.id,
+            universe=bot.universe or {},
         )
 
     async def start(self, bot_id: int) -> BotRunner:

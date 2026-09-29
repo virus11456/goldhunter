@@ -56,6 +56,14 @@ TRADER_SYSTEM = """你是一位紀律嚴謹的加密貨幣永續合約交易員�
 - reasoning 用繁體中文，150 字內，列出關鍵依據（技術面 / 籌碼面 / 消息面）。"""
 
 
+REVIEW_VOTE_SCHEMA = {
+    "type": "object",
+    "properties": {"verdict": {"type": "string", "enum": ["approve", "veto"]}, "reasoning": {"type": "string"}},
+    "required": ["verdict", "reasoning"],
+    "additionalProperties": False,
+}
+
+
 class AIStrategy(Strategy):
     """AI 交易員：不需要事先寫策略，AI 自主判斷多空、倉位與止損。"""
 
@@ -66,6 +74,9 @@ class AIStrategy(Strategy):
         "bars": 40,
         "min_confidence": 0.6,
         "reference_strategy_id": None,  # 選填：讓 AI 參考的策略
+        "persona_id": None,  # 選填：交易大腦（投資大師）
+        "reviewer_ids": [],  # 選填：審查委員（投資大師），可否決開倉
+        "veto_rule": "any",  # any＝任一委員否決就不做；majority＝否決票過半才不做
     }
     warmup = 60
     uses_ai = True
@@ -74,7 +85,38 @@ class AIStrategy(Strategy):
         super().__init__(params, ai)
         self.reference: Strategy | None = None  # 由 BotManager 依 reference_strategy_id 注入
         self.reference_name: str | None = None
+        self.persona: tuple[str, str] | None = None  # (名字, 思維檔案)，由 attach_personas 注入
+        self.reviewers: list[tuple[str, str]] = []
         self.last_ai_result = None
+
+    def _system(self) -> str:
+        if not self.persona:
+            return TRADER_SYSTEM
+        name, profile = self.persona
+        return (f"{TRADER_SYSTEM}\n\n## 你的交易大腦：{name}\n以下是{name}的交易思維檔案。用他的心智模型、決策規則與反模式來判斷；"
+                f"檔案說他不適合的情境（例如不交易某類商品）就選 hold。reasoning 開頭寫「以{name}的角度」。\n\n{profile}")
+
+    async def _committee(self, decision: Decision, prompt: str) -> tuple[bool, list[dict]]:
+        """審查委員逐一表決；回傳（是否否決, 各委員意見）"""
+        opinions = []
+        desc = (f"## 待審交易\n{decision.action.value}，倉位 {decision.size_pct}%、槓桿 {decision.leverage}x、"
+                f"止損 {decision.stop_loss}、止盈 {decision.take_profit}\n交易員理由：{decision.reasoning}")
+        for name, profile in self.reviewers:
+            system = (f"你是投資委員會的審查委員：{name}。依下列思維檔案審查這筆交易，只能 approve（放行）或 veto（否決）。"
+                      f"reasoning 用繁體中文 80 字內、用{name}的語氣。\n\n{profile}")
+            try:
+                r = await self.ai.complete_json(system, prompt + "\n\n" + desc, REVIEW_VOTE_SCHEMA)
+                v = r.decision
+                opinions.append({"name": name, "verdict": "veto" if v.get("verdict") == "veto" else "approve",
+                                 "reasoning": v.get("reasoning", "")})
+            except Exception as e:  # 審查失敗時保守視為否決
+                opinions.append({"name": name, "verdict": "veto", "reasoning": f"審查失敗，保守否決：{e}"})
+        vetoes = sum(1 for o in opinions if o["verdict"] == "veto")
+        if self.p("veto_rule") == "majority":
+            vetoed = vetoes * 2 > len(opinions)
+        else:
+            vetoed = vetoes > 0
+        return vetoed, opinions
 
     async def _reference_text(self, ctx: StrategyContext) -> str:
         if not self.reference:
@@ -101,7 +143,7 @@ class AIStrategy(Strategy):
         prompt = build_market_prompt(ctx, self.p("instructions"), int(self.p("bars")), extra=extra)
         if ctx.intel:
             prompt += "\n\n" + ctx.intel
-        result = await self.ai.complete_json(TRADER_SYSTEM, prompt, DECISION_SCHEMA)
+        result = await self.ai.complete_json(self._system(), prompt, DECISION_SCHEMA)
         d = result.decision
         action = d.get("action", "hold")
         decision = Decision(
@@ -116,7 +158,19 @@ class AIStrategy(Strategy):
             source="ai",
         )
         self.last_ai_result = result  # 供引擎寫入決策紀錄
+        meta: dict = {}
+        if self.persona:
+            meta["persona"] = self.persona[0]
         if decision.action != Action.HOLD and decision.confidence < self.p("min_confidence"):
             decision.reasoning = f"[信心 {decision.confidence:.2f} 低於門檻，改為觀望] {decision.reasoning}"
             decision.action = Action.HOLD
+        if decision.action in (Action.OPEN_LONG, Action.OPEN_SHORT) and self.reviewers:
+            vetoed, opinions = await self._committee(decision, prompt)
+            meta["committee"] = {"rule": self.p("veto_rule"), "vetoed": vetoed, "opinions": opinions,
+                                 "proposed": decision.action.value}
+            if vetoed:
+                who = "、".join(o["name"] for o in opinions if o["verdict"] == "veto")
+                decision.reasoning = f"[委員會否決：{who}] {decision.reasoning}"
+                decision.action = Action.HOLD
+        decision.meta = meta or None
         return decision

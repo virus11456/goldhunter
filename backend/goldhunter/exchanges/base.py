@@ -49,6 +49,10 @@ class ExchangeAdapter(ABC):
     async def cancel_order(self, order_id: str, instrument: Instrument) -> None:
         raise NotImplementedError
 
+    async def perp_volumes(self) -> list[tuple[str, float]]:
+        """USDT 永續合約的 24 小時成交額 [(幣種, USDT)]，給標的範圍規則使用"""
+        raise NotImplementedError("此交易所不支援依成交量挑選標的")
+
     async def is_market_open(self, instrument: Instrument) -> bool:
         return self.capabilities(instrument).always_open
 

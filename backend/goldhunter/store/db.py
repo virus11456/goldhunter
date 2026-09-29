@@ -72,6 +72,9 @@ class Bot(SQLModel, table=True):
     risk: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # AI 副駕駛設定（訊號審核 / 持倉管理 / 參數微調），見 copilot.config.CopilotConfig
     copilot: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # 標的範圍：{"mode": "list"} 用 symbols；{"mode": "rules", "top_n": 10, "exclude_meme": true,
+    #   "exclude": ["DOGE"], "include_only": []} 依 24 小時成交量自動挑選 USDT 永續
+    universe: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # 此 Bot 專屬的策略參數覆寫（AI 參數微調套用在這裡，不影響其他 Bot）
     params_override: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     status: str = "stopped"  # stopped / running / error
@@ -140,6 +143,27 @@ class TuningRun(SQLModel, table=True):
     reasoning: str = Field(default="", sa_column=Column(Text))
     status: str = "proposed"  # proposed / applied / rejected / failed
     note: str | None = None
+
+
+class Persona(SQLModel, table=True):
+    """投資大師的思維檔案（內建 / 上傳 / 系統內蒸餾），當 AI 交易員的「大腦」或審查委員"""
+
+    id: int | None = Field(default=None, primary_key=True)
+    slug: str | None = Field(default=None, index=True)  # 內建大師的代號
+    name: str
+    role: str = "trader"  # trader（提出交易）/ reviewer（審查、可否決）/ both
+    markets: list[str] = Field(default_factory=lambda: ["crypto"], sa_column=Column(JSON))
+    summary: str = ""
+    profile: str = Field(default="", sa_column=Column(Text))
+    source: str = "upload"  # builtin / upload / distill
+    # draft：尚未通過保真度（只能用在模擬帳戶）；paper_only：保真度通過、模擬期中；active：可用於實盤
+    status: str = "draft"
+    fidelity: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    approved_at: datetime | None = None
+    paper_days: int = 7
+    min_paper_trades: int = 3
+    meta: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=_now)
 
 
 class AppSetting(SQLModel, table=True):

@@ -158,3 +158,4 @@ class Decision(BaseModel):
     confidence: float = Field(default=1.0, ge=0, le=1)
     reasoning: str = ""
     source: str = "strategy"  # strategy / ai / tradingview / manual
+    meta: dict | None = None  # 附加資訊（例如 AI 交易員的大師與審查委員意見），會一併寫入決策紀錄

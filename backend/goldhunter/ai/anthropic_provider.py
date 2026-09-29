@@ -38,6 +38,9 @@ class AnthropicProvider(AIProvider):
 
     async def _create(self, **kw):
         base = self._kwargs()
+        if isinstance(kw.get("system"), str) and len(kw["system"]) > 2000:
+            # 長的 system（例如大師思維檔案）標記為可快取：重複送出時只收約一折的讀取費
+            kw["system"] = [{"type": "text", "text": kw["system"], "cache_control": {"type": "ephemeral"}}]
         if "output_config" in kw and "output_config" in base:
             kw["output_config"] = base.pop("output_config") | kw["output_config"]
         try:
@@ -76,6 +79,18 @@ class AnthropicProvider(AIProvider):
             input_tokens=msg.usage.input_tokens,
             output_tokens=msg.usage.output_tokens,
         )
+
+    async def research_text(self, system: str, user: str, max_searches: int = 10) -> str:
+        """使用 Claude 伺服器端網路搜尋工具做調研；處理 pause_turn（伺服器端迴圈上限）續跑"""
+        tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": max_searches}]
+        messages: list = [{"role": "user", "content": user}]
+        msg = None
+        for _ in range(5):
+            msg, _text = await self._create(max_tokens=32000, system=system, messages=messages, tools=tools)
+            if msg.stop_reason != "pause_turn":
+                break
+            messages = [{"role": "user", "content": user}, {"role": "assistant", "content": msg.content}]
+        return "".join(b.text for b in msg.content if b.type == "text") if msg else ""
 
     async def complete_text(self, system: str, user: str, max_tokens: int = 32000) -> str:
         _, text = await self._create(

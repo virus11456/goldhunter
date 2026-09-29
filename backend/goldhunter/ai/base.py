@@ -65,6 +65,10 @@ class AIProvider(ABC):
     async def complete_text(self, system: str, user: str, max_tokens: int = 16000) -> str:
         """一般文字輸出（例如 Pine Script 轉 Python）。"""
 
+    async def research_text(self, system: str, user: str, max_searches: int = 10) -> str:
+        """需要上網調研的長文輸出；不支援網路搜尋的供應商退回用模型本身的知識"""
+        return await self.complete_text(system, user)
+
     async def decide(self, user_prompt: str) -> AIResult:
         return await self.complete_json(SYSTEM_PROMPT, user_prompt, DECISION_SCHEMA)
 

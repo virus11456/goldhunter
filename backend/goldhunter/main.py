@@ -10,12 +10,21 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlmodel import Session
 
-from goldhunter.api import backtest_routes, bot_routes, intel_routes, settings_routes, tradingview_routes
+from goldhunter.api import (
+    backtest_routes,
+    bot_routes,
+    intel_routes,
+    persona_routes,
+    settings_routes,
+    tradingview_routes,
+)
 from goldhunter.api.deps import require_token
 from goldhunter.config import get_settings
 from goldhunter.core.secrets import api_token
 from goldhunter.engine.manager import manager
+from goldhunter.personas.lifecycle import seed_builtin
 from goldhunter.store.db import get_engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -26,6 +35,8 @@ log = logging.getLogger("goldhunter")
 async def lifespan(app: FastAPI):
     settings = get_settings()
     get_engine()
+    with Session(get_engine()) as s:
+        seed_builtin(s)  # 內建投資大師
     token_file = settings.data_dir / "api_token"
     api_token()
     if not settings.api_token:
@@ -38,7 +49,7 @@ async def lifespan(app: FastAPI):
         await runner.stop()
 
 
-app = FastAPI(title="GoldHunter", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="GoldHunter 智能量化交易策略平台", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=get_settings().cors_origins, allow_methods=["*"], allow_headers=["*"],
 )
@@ -48,6 +59,7 @@ app.include_router(settings_routes.router, prefix="/api", dependencies=auth, tag
 app.include_router(bot_routes.router, prefix="/api", dependencies=auth, tags=["bots"])
 app.include_router(backtest_routes.router, prefix="/api", dependencies=auth, tags=["backtest"])
 app.include_router(intel_routes.router, prefix="/api", dependencies=auth, tags=["intel"])
+app.include_router(persona_routes.router, prefix="/api", dependencies=auth, tags=["personas"])
 app.include_router(tradingview_routes.router, prefix="/api", tags=["tradingview"])
 
 

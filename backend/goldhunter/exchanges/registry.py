@@ -42,5 +42,6 @@ def build_exchange(
             await orig_close()
 
         ex.close = close  # type: ignore[method-assign]
+        ex.perp_volumes = market_data.perp_volumes  # type: ignore[method-assign]
         return ex
     return CCXTExchange(exchange_id, api_key=api_key, secret=secret, passphrase=passphrase, testnet=testnet)

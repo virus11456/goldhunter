@@ -11,6 +11,7 @@ from goldhunter.backtest.data import fetch_history
 from goldhunter.backtest.engine import BacktestConfig, run_backtest
 from goldhunter.core.models import Instrument
 from goldhunter.engine.manager import provider_from_config
+from goldhunter.personas.attach import attach_personas
 from goldhunter.risk.manager import RiskConfig
 from goldhunter.store.db import AIModelConfig, BacktestRun, StrategyConfig, get_session
 from goldhunter.strategies.registry import attach_reference, build_strategy
@@ -58,6 +59,7 @@ async def create_backtest(body: BacktestIn, s: Session = Depends(get_session)):
         params = {**(st.params or {}), **(body.params or {})}
         strategy = build_strategy(st.kind, params, st.code, ai=ai)
         attach_reference(strategy, s, check=False)
+        attach_personas(strategy, s, check=False)
         risk = RiskConfig(**{"daily_loss_limit_pct": 0, "max_orders_per_hour": 10_000, **body.risk})
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

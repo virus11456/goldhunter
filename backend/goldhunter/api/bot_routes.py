@@ -12,6 +12,7 @@ from sqlmodel import Session, col, func, select
 from goldhunter.copilot.config import CopilotConfig
 from goldhunter.core.models import Action, Decision, Instrument
 from goldhunter.engine.manager import manager
+from goldhunter.engine.universe import UniverseRules
 from goldhunter.risk.manager import RiskConfig
 from goldhunter.store.db import Bot, DecisionLog, EquitySnapshot, StrategyConfig, Trade, TuningRun, get_session
 
@@ -24,6 +25,9 @@ class AITraderIn(BaseModel):
     instructions: str = ""
     reference_strategy_id: int | None = None
     min_confidence: float = 0.6
+    persona_id: int | None = None  # 交易大腦（投資大師）
+    reviewer_ids: list[int] = []  # 審查委員（投資大師）
+    veto_rule: str = "any"  # any / majority
 
 
 class BotIn(BaseModel):
@@ -38,6 +42,7 @@ class BotIn(BaseModel):
     risk: dict[str, Any] = {}
     copilot: dict[str, Any] = {}
     params_override: dict[str, Any] = {}
+    universe: dict[str, Any] = {}
 
 
 def bot_out(b: Bot, s: Session) -> dict:
@@ -49,7 +54,8 @@ def bot_out(b: Bot, s: Session) -> dict:
     d["mode"] = "ai_trader" if strat and strat.kind == "ai" else ("tradingview" if strat and strat.kind == "tradingview"
                                                                    else "strategy")
     d["ai_trader"] = (
-        {k: (strat.params or {}).get(k) for k in ("instructions", "reference_strategy_id", "min_confidence")}
+        {k: (strat.params or {}).get(k) for k in ("instructions", "reference_strategy_id", "min_confidence",
+                                                  "persona_id", "reviewer_ids", "veto_rule")}
         if strat and strat.kind == "ai" else None
     )
     d["running"] = bool(runner and runner.running)
@@ -98,10 +104,13 @@ def _validate(body: BotIn) -> None:
             Instrument.parse(sym)
         RiskConfig(**body.risk)
         CopilotConfig(**body.copilot)
+        UniverseRules(**body.universe)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    if not body.symbols:
-        raise HTTPException(400, "至少需要一個交易對")
+    if not body.symbols and (body.universe or {}).get("mode") != "rules":
+        raise HTTPException(400, "至少需要一個交易對（或改用規則自動挑選）")
+    if body.ai_trader and body.ai_trader.veto_rule not in ("any", "majority"):
+        raise HTTPException(400, "否決規則只能是 any 或 majority")
 
 
 @router.get("/bots")
@@ -113,7 +122,8 @@ def list_bots(s: Session = Depends(get_session)):
 def create_bot(body: BotIn, s: Session = Depends(get_session)):
     _validate(body)
     _ensure_strategy(body, s)
-    b = Bot(**body.model_dump(exclude={"risk", "copilot", "ai_trader"}), risk=RiskConfig(**body.risk).model_dump(),
+    b = Bot(**body.model_dump(exclude={"risk", "copilot", "ai_trader", "universe"}), risk=RiskConfig(**body.risk).model_dump(),
+            universe=UniverseRules(**body.universe).model_dump() if body.universe else {},
             copilot=CopilotConfig(**body.copilot).model_dump())
     s.add(b)
     s.commit()
@@ -128,8 +138,9 @@ def update_bot(bot_id: int, body: BotIn, s: Session = Depends(get_session)):
         raise HTTPException(400, "請先停止 Bot 再修改設定")
     _validate(body)
     _ensure_strategy(body, s, existing=b)
-    for k, v in body.model_dump(exclude={"ai_trader"}).items():
+    for k, v in body.model_dump(exclude={"ai_trader", "universe"}).items():
         setattr(b, k, v)
+    b.universe = UniverseRules(**body.universe).model_dump() if body.universe else {}
     b.risk = RiskConfig(**body.risk).model_dump()
     b.copilot = CopilotConfig(**body.copilot).model_dump()
     s.add(b)

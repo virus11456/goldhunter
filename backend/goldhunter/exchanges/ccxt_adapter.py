@@ -145,6 +145,19 @@ class CCXTExchange(ExchangeAdapter):
             raw={k: o.get(k) for k in ("id", "status", "average", "filled", "timestamp")},
         )
 
+    async def perp_volumes(self) -> list[tuple[str, float]]:
+        await self._ensure_markets()
+        quote = "USDC" if self.id == "hyperliquid" else "USDT"
+        tickers = await self.client.fetch_tickers()
+        out = []
+        for sym, t in tickers.items():
+            m = self.client.markets.get(sym) or {}
+            if not m.get("swap") or m.get("settle") != quote or not m.get("active", True):
+                continue
+            vol = t.get("quoteVolume") or ((t.get("baseVolume") or 0) * (t.get("last") or 0))
+            out.append((m.get("base") or sym.split("/")[0], float(vol or 0)))
+        return out
+
     async def cancel_order(self, order_id: str, instrument: Instrument) -> None:
         await self.client.cancel_order(order_id, exchange_symbol(self.id, instrument))
 

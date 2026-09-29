@@ -24,6 +24,7 @@ from goldhunter.copilot.config import CopilotConfig
 from goldhunter.copilot.review import manage_position, review_signal
 from goldhunter.copilot.tune import tune_strategy
 from goldhunter.core.models import Action, Decision, Instrument, OrderStatus, Position
+from goldhunter.engine.universe import UniverseRules, pick, to_instruments
 from goldhunter.exchanges.base import ExchangeAdapter
 from goldhunter.exchanges.paper import PaperExchange
 from goldhunter.intel.hub import IntelSnapshot, hub
@@ -71,6 +72,7 @@ class BotRunner:
         copilot: CopilotConfig | None = None,
         exchange_id: str = "binance",
         strategy_id: int | None = None,
+        universe: dict | None = None,
     ):
         self.bot_id = bot_id
         self.name = name
@@ -84,6 +86,9 @@ class BotRunner:
         self.copilot = copilot or CopilotConfig()
         self.exchange_id = exchange_id.split(":")[-1]
         self.strategy_id = strategy_id
+        self.universe = UniverseRules(**(universe or {}))
+        self.base_instruments = list(instruments)
+        self.universe_at: datetime | None = None
         self.risk_state = RiskState()
         self.stops: dict[Instrument, StopLevels] = {}
         self.last_bar: dict[Instrument, int] = {}
@@ -144,6 +149,7 @@ class BotRunner:
     async def tick(self) -> None:
         async with self._lock:
             self.last_run_at = _utcnow()
+            await self._refresh_universe()
             if self.copilot_active and self.baseline is None:
                 # 對照組必須在第一個訊號之前建立，才能公平比較
                 start_equity = (await self.exchange.fetch_balance()).total
@@ -191,6 +197,23 @@ class BotRunner:
             price = await self.exchange.fetch_price(decision.instrument)
             self.last_price[decision.instrument] = price
             return await self._handle(decision, price=price)
+
+    # ---------- 標的範圍 ----------
+    async def _refresh_universe(self) -> None:
+        if self.universe.mode != "rules":
+            return
+        now = _utcnow()
+        if self.universe_at and now - self.universe_at < timedelta(hours=self.universe.refresh_hours):
+            return
+        try:
+            picked = to_instruments(pick(await self.exchange.perp_volumes(), self.universe))
+        except Exception as e:
+            log.warning("bot %s 標的規則更新失敗，沿用原清單：%s", self.bot_id, e)
+            self.universe_at = now
+            return
+        held = [p.instrument for p in await self.exchange.fetch_positions() if p.instrument not in picked]
+        self.instruments = picked + held  # 持倉中的標的繼續管理到平倉
+        self.universe_at = now
 
     # ---------- AI 副駕駛 ----------
     async def _intel(self, inst: Instrument) -> IntelSnapshot:

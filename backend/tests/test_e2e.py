@@ -311,3 +311,73 @@ def test_pine_auto_review_lifecycle(client, monkeypatch):
     client.ai.replies = [GOOD, EQUIV]
     fixed = client.post(f"/api/strategies/{r2['strategy']['id']}/fix", headers=H, json={"ai_model_id": ai["id"]}).json()
     assert fixed["review"]["passed"] and fixed["strategy"]["status"] == "paper_only"
+
+
+def test_personas_api_lifecycle_and_universe(client):
+    from .test_personas import OPEN, SKILL_MD, b64
+
+    ps = client.get("/api/personas", headers=H).json()
+    names = {p["slug"]: p for p in ps if p["slug"]}
+    assert set(names) >= {"livermore", "soros", "munger", "buffett"}
+    assert names["munger"]["role"] == "reviewer" and names["livermore"]["status"] == "draft"
+
+    up = client.post("/api/personas/upload", headers=H,
+                     json={"filename": "SKILL.md", "content_base64": b64(SKILL_MD)}).json()
+    assert up["name"] == "測試交易員" and up["source"] == "upload" and up["status"] == "draft"
+
+    ai = client.post("/api/ai-models", headers=H, json={"name": "c", "provider": "anthropic", "api_key": "k"}).json()
+    est = client.post("/api/personas/estimate", headers=H, json={"name": "某交易員", "ai_model_id": ai["id"]}).json()
+    assert est["usd"] > 0 and est["web_searches"] > 0
+
+    from goldhunter.api import persona_routes
+    persona_routes.provider_from_config = lambda cfg: client.ai
+    client.ai.replies = [
+        {"questions": [{"type": "stance", "question": "q", "expected": "e"}]},
+        {"answers": ["a"]},
+        {"summary": "ok", "dimensions": [{"name": "立場一致性", "score": 80, "max": 100, "reason": ""}]},
+    ]
+    fid = client.post(f"/api/personas/{up['id']}/fidelity", headers=H, json={"ai_model_id": ai["id"]}).json()
+    assert fid["fidelity"]["score"] == 80 and fid["status"] == "paper_only"
+    assert fid["paper_progress"]["days_required"] == 7
+
+    # 實盤帳戶：大師還在模擬期 → 拒絕；模擬帳戶 → 可以
+    live = client.post("/api/accounts", headers=H, json={"name": "l", "exchange_id": "binance", "paper": False,
+                                                         "api_key": "k", "secret": "s"}).json()
+    paper = client.post("/api/accounts", headers=H, json={"name": "p", "exchange_id": "binance"}).json()
+    body = {"name": "大師 Bot", "ai_model_id": ai["id"], "symbols": [], "timeframe": "1h", "interval_sec": 3600,
+            "universe": {"mode": "rules", "top_n": 2, "exclude_meme": True},
+            "ai_trader": {"instructions": "", "persona_id": up["id"], "reviewer_ids": [names["munger"]["id"]]}}
+    b_live = client.post("/api/bots", headers=H, json={**body, "account_id": live["id"]}).json()
+    r = client.post(f"/api/bots/{b_live['id']}/start", headers=H)
+    assert r.status_code == 400 and "模擬期" in r.json()["detail"]
+    b = client.post("/api/bots", headers=H, json={**body, "account_id": paper["id"]}).json()
+    assert b["universe"]["mode"] == "rules" and b["ai_trader"]["persona_id"] == up["id"]
+
+    async def vols():
+        return [("DOGE", 9e9), ("BTC", 5e9), ("ETH", 4e9), ("SOL", 1e9)]
+
+    captured = []
+
+    async def ai_json(system, user, schema):
+        from goldhunter.ai.base import AIResult
+        captured.append(system)
+        d = {"verdict": "veto", "reasoning": "槓桿追高，蠢事"} if "審查委員" in system else OPEN
+        return AIResult(decision=d, raw_text="{}", model="fake")
+
+    client.ai.complete_json = ai_json
+    assert client.post(f"/api/bots/{b['id']}/start", headers=H).status_code == 200
+    runner = manager.runners[b["id"]]
+    runner.exchange.perp_volumes = vols
+    runner.universe_at = None
+    _tick(client, b["id"], 2)
+    assert [i.symbol for i in runner.instruments] == ["BTC/USDT", "ETH/USDT"]  # 規則挑選、排除迷因幣
+    assert any("你的交易大腦：測試交易員" in sp for sp in captured)
+    dec = client.get(f"/api/decisions?bot_id={b['id']}", headers=H).json()
+    vetoed = [d for d in dec if (d["decision"].get("meta") or {}).get("committee", {}).get("vetoed")]
+    assert vetoed and vetoed[0]["decision"]["meta"]["committee"]["opinions"][0]["name"] == "查理·芒格"
+    assert not client.get(f"/api/trades?bot_id={b['id']}", headers=H).json()  # 全被芒格否決
+    client.post(f"/api/bots/{b['id']}/stop", headers=H)
+
+    # 手動開放實盤
+    assert client.post(f"/api/personas/{up['id']}/promote", headers=H).json()["status"] == "active"
+    assert client.delete(f"/api/personas/{names['munger']['id']}", headers=H).status_code == 400  # 內建不可刪
