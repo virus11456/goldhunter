@@ -67,17 +67,28 @@ class CCXTExchange(ExchangeAdapter):
             await self.client.load_markets()
             self._markets_loaded = True
 
+    def _contract_size(self, sym: str) -> float:
+        """合約面值：OKX 等交易所的下單數量是「張」，1 張 = contractSize 個幣；本系統內部一律用幣的數量"""
+        m = self.client.markets.get(sym) if self._markets_loaded else None
+        return float((m or {}).get("contractSize") or 1)
+
     def capabilities(self, instrument: Instrument) -> Capabilities:
         info = SUPPORTED[self.id]
         caps = Capabilities(supports_short=True, max_leverage=info["max_leverage"])
         if self._markets_loaded and (m := self.client.markets.get(exchange_symbol(self.id, instrument))):
-            caps.min_qty = (m.get("limits", {}).get("amount", {}) or {}).get("min") or 0.0
+            caps.min_qty = ((m.get("limits", {}).get("amount", {}) or {}).get("min") or 0.0) * float(
+                m.get("contractSize") or 1)
             caps.taker_fee = m.get("taker") or caps.taker_fee
         return caps
 
     def round_qty(self, instrument: Instrument, qty: float) -> float:
-        if self._markets_loaded and exchange_symbol(self.id, instrument) in self.client.markets:
-            qty = float(self.client.amount_to_precision(exchange_symbol(self.id, instrument), qty))
+        sym = exchange_symbol(self.id, instrument)
+        if self._markets_loaded and sym in self.client.markets:
+            cs = self._contract_size(sym)
+            try:
+                qty = float(self.client.amount_to_precision(sym, qty / cs)) * cs
+            except ccxt.BaseError:  # 低於最小下單量
+                return 0.0
         return super().round_qty(instrument, qty)
 
     async def fetch_candles(self, instrument: Instrument, timeframe: str, limit: int = 200) -> list[Candle]:
@@ -132,13 +143,14 @@ class CCXTExchange(ExchangeAdapter):
         if self.id == "hyperliquid" and req.type == OrderType.MARKET and price is None:
             # Hyperliquid 市價單需要參考價計算滑價上限
             price = await self.fetch_price(req.instrument)
-        o = await self.client.create_order(sym, req.type.value, req.side.value, req.quantity, price, params)
+        cs = self._contract_size(sym)
+        o = await self.client.create_order(sym, req.type.value, req.side.value, req.quantity / cs, price, params)
         return Order(
             id=str(o.get("id")),
             instrument=req.instrument,
             side=Side(req.side),
             quantity=req.quantity,
-            filled=float(o.get("filled") or 0),
+            filled=float(o.get("filled") or 0) * cs,
             avg_price=o.get("average") or o.get("price"),
             status=_STATUS.get(o.get("status") or "", OrderStatus.OPEN),
             fee=float((o.get("fee") or {}).get("cost") or 0),

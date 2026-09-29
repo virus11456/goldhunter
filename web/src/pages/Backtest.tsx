@@ -206,7 +206,7 @@ export default function Backtest() {
                   <div>
                     <div className="label mb-2">風控覆寫</div>
                     <div className="mb-2 text-xs text-muted">回測預設關閉單日熔斷與每小時下單上限。</div>
-                    <RiskForm value={risk} defaults={{ ...meta.risk_defaults, daily_loss_limit_pct: 0, max_orders_per_hour: 10000 }} onChange={setRisk} />
+                    <RiskForm value={risk} defaults={{ ...meta.risk_defaults, daily_loss_limit_pct: 0, max_orders_per_hour: 10000, ...(strat ? meta.strategy_types.find((t) => t.type === strat.kind)?.recommended_risk : {}) }} onChange={setRisk} />
                   </div>
                 </div>
               </Collapsible>

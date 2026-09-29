@@ -53,6 +53,16 @@ class StrategyContext(BaseModel):
         return [c.volume for c in self.candles]
 
     @property
+    def ts(self) -> int:
+        """最新一根 K 棒的開盤時間（毫秒，UTC）"""
+        return self.candles[-1].ts
+
+    @property
+    def position_avg_price(self) -> float | None:
+        """持倉均價（對應 Pine 的 strategy.position_avg_price）"""
+        return self.position.entry_price if self.position else None
+
+    @property
     def price(self) -> float:
         return self.candles[-1].close
 
@@ -62,15 +72,16 @@ class StrategyContext(BaseModel):
         return self.position.quantity if self.position else 0.0
 
     # ---- 產生決策的捷徑 ----
-    def long(self, size_pct: float, stop_loss: float | None = None, take_profit: float | None = None,
-             leverage: int = 1, reasoning: str = "", confidence: float = 1.0) -> Decision:
-        return Decision(instrument=self.instrument, action=Action.OPEN_LONG, size_pct=size_pct,
+    def long(self, size_pct: float = 0.0, stop_loss: float | None = None, take_profit: float | None = None,
+             leverage: int = 1, reasoning: str = "", confidence: float = 1.0, qty: float | None = None) -> Decision:
+        """size_pct：佔權益 %；qty：固定數量（幣），有給就用 qty（對應 Pine 的 strategy.entry qty=）"""
+        return Decision(instrument=self.instrument, action=Action.OPEN_LONG, size_pct=size_pct, quantity=qty,
                         stop_loss=stop_loss, take_profit=take_profit, leverage=leverage,
                         reasoning=reasoning, confidence=confidence)
 
-    def short(self, size_pct: float, stop_loss: float | None = None, take_profit: float | None = None,
-              leverage: int = 1, reasoning: str = "", confidence: float = 1.0) -> Decision:
-        return Decision(instrument=self.instrument, action=Action.OPEN_SHORT, size_pct=size_pct,
+    def short(self, size_pct: float = 0.0, stop_loss: float | None = None, take_profit: float | None = None,
+              leverage: int = 1, reasoning: str = "", confidence: float = 1.0, qty: float | None = None) -> Decision:
+        return Decision(instrument=self.instrument, action=Action.OPEN_SHORT, size_pct=size_pct, quantity=qty,
                         stop_loss=stop_loss, take_profit=take_profit, leverage=leverage,
                         reasoning=reasoning, confidence=confidence)
 
@@ -92,6 +103,9 @@ class Strategy(ABC):
     default_params: ClassVar[dict[str, Any]] = {}
     warmup: ClassVar[int] = 50
     uses_ai: ClassVar[bool] = False
+    # 策略需要的風控設定（例如分批加碼要 allow_pyramiding）；建立 Bot / 回測時墊在使用者設定底下
+    recommended_risk: ClassVar[dict[str, Any]] = {}
+    paper_first: ClassVar[bool] = False  # 建立後先進模擬期
 
     def __init__(self, params: dict[str, Any] | None = None, ai=None):
         self.params: dict[str, Any] = {**self.default_params, **(params or {})}

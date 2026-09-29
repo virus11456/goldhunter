@@ -16,6 +16,7 @@ from goldhunter.engine.manager import manager
 from goldhunter.engine.universe import UniverseRules
 from goldhunter.risk.manager import RiskConfig
 from goldhunter.store.db import Bot, DecisionLog, EquitySnapshot, StrategyConfig, Trade, TuningRun, get_session
+from goldhunter.strategies.registry import recommended_risk
 
 router = APIRouter()
 
@@ -104,6 +105,13 @@ def _ensure_strategy(body: BotIn, s: Session, existing: Bot | None = None) -> No
     body.strategy_id = st.id
 
 
+def _risk(body: BotIn, s: Session) -> dict:
+    """使用者的風控設定，墊在策略建議的風控之上（例如分批加碼策略需要 allow_pyramiding）"""
+    st = s.get(StrategyConfig, body.strategy_id) if body.strategy_id else None
+    rec = recommended_risk(st.kind, st.code) if st else {}
+    return RiskConfig(**{**rec, **body.risk}).model_dump()
+
+
 def _validate(body: BotIn) -> None:
     try:
         for sym in body.symbols:
@@ -127,7 +135,7 @@ def list_bots(s: Session = Depends(get_session)):
 def create_bot(body: BotIn, s: Session = Depends(get_session)):
     _validate(body)
     _ensure_strategy(body, s)
-    b = Bot(**body.model_dump(exclude={"risk", "copilot", "ai_trader", "universe", "entry"}), risk=RiskConfig(**body.risk).model_dump(),
+    b = Bot(**body.model_dump(exclude={"risk", "copilot", "ai_trader", "universe", "entry"}), risk=_risk(body, s),
             universe=UniverseRules(**body.universe).model_dump() if body.universe else {},
             entry=EntryConfig(**body.entry).model_dump(),
             copilot=CopilotConfig(**body.copilot).model_dump())
@@ -148,7 +156,7 @@ def update_bot(bot_id: int, body: BotIn, s: Session = Depends(get_session)):
         setattr(b, k, v)
     b.entry = EntryConfig(**body.entry).model_dump()
     b.universe = UniverseRules(**body.universe).model_dump() if body.universe else {}
-    b.risk = RiskConfig(**body.risk).model_dump()
+    b.risk = _risk(body, s)
     b.copilot = CopilotConfig(**body.copilot).model_dump()
     s.add(b)
     s.commit()

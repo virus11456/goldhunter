@@ -608,7 +608,7 @@ export default function Bots() {
             <div className="space-y-2">
               <div className="text-xs font-medium uppercase tracking-wider text-muted">進階設定</div>
               <Collapsible title="風控設定" icon={<Icons.shield className="h-4 w-4" />}>
-                <RiskForm value={form.risk} defaults={meta.risk_defaults} onChange={(r) => setForm({ ...form, risk: r })} />
+                <RiskForm value={form.risk} defaults={{ ...meta.risk_defaults, ...(strat ? meta.strategy_types.find((t) => t.type === strat.kind)?.recommended_risk : {}) }} onChange={(r) => setForm({ ...form, risk: r })} />
               </Collapsible>
               {!isTrader && strat && strat.kind !== 'tradingview' && Object.keys(strategyParams).length > 0 && (
                 <Collapsible title="策略參數（僅此 Bot）" icon={<Icons.chart className="h-4 w-4" />}>

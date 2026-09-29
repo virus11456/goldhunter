@@ -112,6 +112,8 @@ def constrain_review(raw: dict, signal: Decision, price: float, cfg: CopilotConf
     if clamped != mult:
         notes.append(f"倉位倍數 {mult}→{clamped}")
     d.size_pct = round(d.size_pct * clamped, 4)
+    if d.quantity:
+        d.quantity = d.quantity * clamped  # 固定數量的策略（分批加碼）一樣按倍數調整
 
     sl = raw.get("stop_loss")
     if sl is not None:

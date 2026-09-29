@@ -151,6 +151,7 @@ class Decision(BaseModel):
     instrument: Instrument
     action: Action
     size_pct: float = Field(default=0.0, ge=0, le=100, description="佔帳戶權益百分比")
+    quantity: float | None = Field(default=None, gt=0, description="固定數量（幣的數量）；有填時優先於 size_pct，例如分批加碼策略")
     close_pct: float = Field(default=100.0, gt=0, le=100, description="action=close 時平掉持倉的百分比")
     leverage: int = Field(default=1, ge=1, le=125)
     stop_loss: float | None = None

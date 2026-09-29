@@ -34,8 +34,10 @@ class UserStrategy(Strategy):
 ```
 ctx 可用：ctx.open / ctx.high / ctx.low / ctx.close / ctx.volume（list[float]，最後一個元素＝當前 K 棒）、
 ctx.price（最新收盤價）、ctx.position_size（>0 多、<0 空、0 空手）、ctx.capabilities.supports_short、
-ctx.long(size_pct, stop_loss=None, take_profit=None, leverage=1, reasoning="")、
-ctx.short(...)（同參數）、ctx.close_position(reasoning="")。size_pct 為佔權益百分比。
+ctx.long(size_pct, stop_loss=None, take_profit=None, leverage=1, reasoning="", qty=None)、
+ctx.short(...)（同參數）、ctx.close_position(reasoning="")。size_pct 為佔權益百分比；qty 為固定數量（幣），有給就優先使用。
+ctx.position_avg_price（持倉均價，對應 strategy.position_avg_price）、ctx.ts（當前 K 棒開盤時間，毫秒 UTC）、
+ctx.balance.total（權益，對應 strategy.equity）。策略物件在 K 棒之間會保留，可用 self 屬性存 var 狀態。
 self.p("參數名") 讀取參數。
 
 ta 模組（皆回傳與輸入等長的 list，資料不足處為 None）：
@@ -48,7 +50,10 @@ ta.crossover(a,b) ta.crossunder(a,b)（回傳 bool，判斷最後一根；a、b 
 - Pine 的 x[1] 對應 python 的 series[-2]，x 對應 series[-1]；取值前檢查 None。
 - strategy.entry(long) → ctx.long；strategy.entry(short) → ctx.short（先檢查 ctx.capabilities.supports_short）；
   strategy.close / strategy.exit 條件平倉 → ctx.close_position；strategy.exit 的 stop/limit → stop_loss/take_profit。
-- 已有同向持倉時不要重複開倉；反向訊號時先回傳 ctx.close_position。
+- 已有同向持倉時不要重複開倉（除非 Pine 設了 pyramiding > 1：此時同方向再開倉＝加碼，並在類別加上
+  recommended_risk = {"allow_pyramiding": True}）；反向訊號時先回傳 ctx.close_position。
+- 每根 K 棒只能回傳一個決策：同一根 K 棒有多筆加碼就合併數量；strategy.close_all 優先於加碼。
+- strategy.fixed 的 qty（口數）用 qty=，並在 default_params 加上 "unit"（1 口＝幾顆幣）讓使用者換算。
 - default_qty_value（百分比）對應 size_pct，未指定時用 10。
 - 只能 import math、statistics、goldhunter.strategies.sdk；不可使用檔案、網路、eval/exec、底線開頭屬性。
 - 若是純指標（indicator），依其 plotshape/alertcondition 的買賣條件轉成進出場。

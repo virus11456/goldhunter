@@ -6,13 +6,26 @@ from goldhunter.strategies.ai_strategy import AIStrategy
 from goldhunter.strategies.base import Strategy
 from goldhunter.strategies.builtin import MACrossStrategy, RSIReversionStrategy
 from goldhunter.strategies.custom import load_strategy_class
+from goldhunter.strategies.mrspencer import MrSpencerStrategy
 
-BUILTIN: dict[str, type[Strategy]] = {cls.name: cls for cls in (MACrossStrategy, RSIReversionStrategy, AIStrategy)}
+BUILTIN: dict[str, type[Strategy]] = {
+    cls.name: cls for cls in (MACrossStrategy, RSIReversionStrategy, MrSpencerStrategy, AIStrategy)}
+
+
+def recommended_risk(kind: str | None, code: str | None = None) -> dict[str, Any]:
+    """策略宣告的建議風控；讀不到就回傳空 dict"""
+    try:
+        if kind == "python" and code:
+            return dict(load_strategy_class(code).recommended_risk or {})
+        return dict(BUILTIN[kind].recommended_risk or {}) if kind in BUILTIN else {}
+    except Exception:
+        return {}
 
 
 def list_strategy_types() -> list[dict]:
     items = [
-        {"type": k, "description": v.description, "default_params": v.default_params, "uses_ai": v.uses_ai}
+        {"type": k, "description": v.description, "default_params": v.default_params, "uses_ai": v.uses_ai,
+         "recommended_risk": v.recommended_risk}
         for k, v in BUILTIN.items()
     ]
     items.sort(key=lambda x: x["type"] != "ai")  # AI 交易員排第一

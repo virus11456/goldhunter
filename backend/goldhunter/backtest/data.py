@@ -7,7 +7,7 @@ import ccxt.async_support as ccxt
 from goldhunter.core.models import Candle, Instrument
 from goldhunter.exchanges.ccxt_adapter import exchange_symbol
 
-MAX_BARS = 20_000
+MAX_BARS = 200_000  # 1 分 K 約 139 天
 
 
 async def fetch_history(exchange_id: str, instrument: Instrument, timeframe: str, start_ms: int,

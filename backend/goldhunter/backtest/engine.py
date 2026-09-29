@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import UTC, datetime
 
@@ -76,6 +77,8 @@ async def run_backtest(strategy: Strategy, instrument: Instrument, timeframe: st
                                     fee=o.fee, reduce_only=req.reduce_only, realized_pnl=pnl, reason=reason))
 
     for i in range(len(candles)):
+        if i and i % 2000 == 0:
+            await asyncio.sleep(0)  # 長回測時讓出事件迴圈，運行中的 Bot 不會卡住
         bar = candles[i]
         # 1) 以本根開盤價執行上一根產生的決策
         if pending is not None:

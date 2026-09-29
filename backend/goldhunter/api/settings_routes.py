@@ -239,6 +239,9 @@ def list_strategies(s: Session = Depends(get_session)):
 def create_strategy(body: StrategyIn, s: Session = Depends(get_session)):
     _check_strategy(body)
     st = StrategyConfig(name=body.name, kind=body.kind, params=body.params, code=body.code)
+    if body.kind in BUILTIN and BUILTIN[body.kind].paper_first:
+        # 由 Pine 轉換而來的內建策略：和貼上的 Pine 策略一樣，先跑模擬期才能上實盤
+        st.status, st.approved_at = "paper_only", datetime.now(UTC)
     s.add(st)
     s.commit()
     s.refresh(st)

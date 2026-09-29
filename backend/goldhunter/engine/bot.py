@@ -173,7 +173,8 @@ class BotRunner:
                 start_equity = (await self.exchange.fetch_balance()).total
                 self.baseline = PaperExchange(initial_cash=start_equity, fee_rate=0.0005, slippage=0.0005)
             for inst in self.instruments:
-                candles = await self.exchange.fetch_candles(inst, self.timeframe, 300)
+                need = max(300, (self.strategy.warmup if self.strategy is not None else 0) + 10)
+                candles = await self.exchange.fetch_candles(inst, self.timeframe, need)
                 if len(candles) < 2:
                     continue
                 price = candles[-1].close

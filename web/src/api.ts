@@ -134,6 +134,8 @@ export interface StrategyTypeMeta {
   description: string
   default_params: Params
   uses_ai: boolean
+  /** 策略需要的風控設定（例如分批加碼策略）；建立 Bot / 回測時後端會墊在使用者設定底下 */
+  recommended_risk?: Partial<RiskConfig>
 }
 
 export interface RiskConfig {

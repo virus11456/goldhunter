@@ -128,10 +128,17 @@ def evaluate(
     if d.leverage > lev_cap:
         notes.append(f"槓桿 {d.leverage}→{lev_cap}")
         d.leverage = lev_cap
-    if d.size_pct > config.max_position_pct:
+    if d.quantity and price > 0 and equity > 0:
+        # 固定數量：換算成佔權益 %（未含槓桿），一樣受單筆倉位上限限制
+        implied = d.quantity * price / (equity * d.leverage) * 100
+        if implied > config.max_position_pct:
+            notes.append(f"數量 {d.quantity:g}→{d.quantity * config.max_position_pct / implied:g}（單筆倉位上限 {config.max_position_pct}%）")
+            d.quantity = d.quantity * config.max_position_pct / implied
+        d.size_pct = min(100.0, round(min(implied, config.max_position_pct), 4))
+    elif d.size_pct > config.max_position_pct:
         notes.append(f"倉位 {d.size_pct}%→{config.max_position_pct}%")
         d.size_pct = config.max_position_pct
-    if d.size_pct <= 0:
+    if d.size_pct <= 0 and not d.quantity:
         reasons.append("倉位為 0")
 
     # 止損
@@ -149,12 +156,17 @@ def evaluate(
         d.take_profit = None
 
     # 數量與總曝險
-    notional = equity * d.size_pct / 100 * d.leverage
-    qty = round_qty(inst, notional / price) if price > 0 else 0.0
+    if d.quantity:
+        qty = round_qty(inst, d.quantity)
+    else:
+        notional = equity * d.size_pct / 100 * d.leverage
+        qty = round_qty(inst, notional / price) if price > 0 else 0.0
     if qty <= 0 and not reasons:
         reasons.append("數量低於最小下單單位")
+    same_dir = (want_long and cur > 0) or (not want_long and cur < 0)
+    # 同方向加碼時，原本的部位也算進總曝險；反手時原部位會先平掉
     exposure = sum(abs(p.quantity) * (price if p.instrument == inst else p.entry_price)
-                   for p in all_positions if p.instrument != inst)
+                   for p in all_positions if p.instrument != inst or same_dir)
     if (exposure + qty * price) > equity * config.max_total_exposure_pct / 100 + 1e-9:
         reasons.append(f"總曝險將超過 {config.max_total_exposure_pct}% 權益")
 

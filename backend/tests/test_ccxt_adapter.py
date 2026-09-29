@@ -52,3 +52,17 @@ async def test_hyperliquid_market_order_uses_usdc_and_price():
     assert create[1] == "BTC/USDC:USDC" and create[5] == 100.0  # 市價單帶參考價
     pos = await ex.fetch_positions()
     assert pos[0].instrument == BTC_PERP and pos[0].quantity == -2
+
+
+async def test_contract_size_conversion():
+    """OKX 等以「張」下單：1 張 = contractSize 個幣，下單要換算，成交量要換回幣"""
+    ex = CCXTExchange("okx", api_key="k", secret="s", passphrase="p")
+    ex.client = FakeClient()
+    ex.client.markets = {"BTC/USDT:USDT": {"contractSize": 0.01, "limits": {"amount": {"min": 1}}}}
+    ex.client.amount_to_precision = lambda sym, amt: f"{int(amt)}"
+    ex._markets_loaded = True
+    assert abs(ex.round_qty(BTC_PERP, 0.257) - 0.25) < 1e-12
+    assert abs(ex.capabilities(BTC_PERP).min_qty - 0.01) < 1e-12
+    o = await ex.place_order(OrderRequest(instrument=BTC_PERP, side=Side.BUY, quantity=0.25))
+    create = next(c for c in ex.client.calls if c[0] == "create_order")
+    assert abs(create[4] - 25) < 1e-9 and abs(o.filled - 0.25) < 1e-12

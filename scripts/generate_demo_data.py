@@ -576,6 +576,7 @@ with TestClient(app) as c:
     st_rsi = P("/strategies", {"name": "ETH RSI 回歸", "kind": "rsi_reversion",
                                "params": {"length": 14, "oversold": 38, "exit": 55, "size_pct": 12, "stop_pct": 2.5}})
     st_tv = P("/strategies", {"name": "TradingView 訊號", "kind": "tradingview"})
+    P("/strategies", {"name": "MRSPENCER v4.6B 黃金", "kind": "mrspencer"})
     tv_csv = c.portal.call(tv_csv_for, PY_CONVERTED)
     conv = P("/strategies/convert-pine", {"name": "通道突破（Pine 轉換）", "pine": PINE, "ai_model_id": claude["id"],
                                           "symbol": "crypto:BTC/USDT:perp", "timeframe": "1h", "tv_csv": tv_csv})
