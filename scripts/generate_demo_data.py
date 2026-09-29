@@ -95,6 +95,9 @@ class MultiFeed(PaperExchange):
         super().__init__(initial_cash=10_000, fee_rate=0.0005, slippage=0.0002)
         self.i = 300
 
+    async def perp_volumes(self):
+        return [("BTC", 3.1e10), ("ETH", 1.6e10), ("DOGE", 4.2e9), ("SOL", 3.8e9), ("PEPE", 1.2e9), ("XRP", 1.1e9)]
+
     async def fetch_candles(self, instrument, timeframe, limit=200):
         s = SERIES[instrument.symbol.split("/")[0]]
         window = s[max(0, self.i - limit): self.i]
@@ -125,8 +128,26 @@ class DemoAI(AIProvider):
 
     async def complete_json(self, system, user, schema):
         r = random.random()
+        if "審查委員" in system:
+            return self._reviewer(system, user)
+        if "出題官" in system:
+            return self._res(FID_EXAM)
+        if "依序回答" in user:
+            return self._res({"answers": ["絕不攤平，錯了就認錯出場", "等待，盤整中什麼都不做", "止損放在關鍵點另一側",
+                                          "這是框架推斷，我沒有公開談過", "先用小部位試單，確認後加碼"]})
+        if "評分官" in system:
+            who = user.split("人物：")[1].split(chr(10))[0]
+            return self._res(FID_GRADES.get(who, FID_GRADES["_"]))
         if "AI 交易員" in system:
-            return self._trader(user)
+            r = self._trader(user)
+            if "你的交易大腦：" in system:
+                name = system.split("你的交易大腦：")[1].split(chr(10))[0]
+                d = json.loads(r.raw_text)
+                if d["reasoning"] and not d["reasoning"].startswith("以"):
+                    d["reasoning"] = f"以{name}的角度，" + d["reasoning"]
+                r = AIResult(decision=d, raw_text=json.dumps(d, ensure_ascii=False), model=r.model,
+                             input_tokens=r.input_tokens, output_tokens=r.output_tokens)
+            return r
         if "持倉管理員" in system:
             if r < 0.72:
                 d = {"action": "hold", "reduce_pct": None, "new_stop": None, "confidence": 0.62,
@@ -184,6 +205,21 @@ class DemoAI(AIProvider):
         return AIResult(decision=d, raw_text=json.dumps(d, ensure_ascii=False), model=self.model,
                         input_tokens=random.randint(2800, 4200), output_tokens=random.randint(90, 220))
 
+    def _res(self, d):
+        return AIResult(decision=d, raw_text=json.dumps(d, ensure_ascii=False), model=self.model,
+                        input_tokens=random.randint(2000, 4000), output_tokens=random.randint(100, 400))
+
+    def _reviewer(self, system, user):
+        name = system.split("審查委員：")[1].split("。")[0]
+        rsi = float(user.split('"rsi14": ')[1].split(",")[0])
+        fr = "資金費率" in user and "0.0" in user
+        long = "open_long" in user
+        if (long and rsi > 60) or (not long and rsi < 40):
+            d = {"verdict": "veto", "reasoning": f"反過來想：RSI {rsi:.0f} 已經{'偏高' if long else '偏低'}，又用槓桿追價，典型的從眾加近因偏誤。這是蠢事，否決。"}
+        else:
+            d = {"verdict": "approve", "reasoning": "理由說得清楚、止損明確、部位不大，沒有明顯的心理偏誤。我沒什麼要補充的。"}
+        return self._res(d)
+
     def _trader(self, user):
         """模擬 AI 交易員：順勢為主，參考情緒與資金費率；多數時候觀望"""
         sym = user.split("## 商品")[1].strip().split("（")[0].split(":")[1].split("/")[0]
@@ -221,8 +257,78 @@ class DemoAI(AIProvider):
                         input_tokens=random.randint(3600, 5200), output_tokens=random.randint(110, 240))
 
     async def complete_text(self, system, user, max_tokens=16000):
+        if "人物研究員" in system:
+            return DISTILLED_PROFILE
         return PY_CONVERTED
 
+
+FID_EXAM = {"questions": [
+    {"type": "stance", "question": "虧損的部位要不要攤平？", "expected": "絕不攤平，只在獲利部位上加碼"},
+    {"type": "stance", "question": "盤整行情該怎麼做？", "expected": "等待方向明確，不在區間中間交易"},
+    {"type": "stance", "question": "止損怎麼設？", "expected": "固定虧損上限，錯了立刻出場"},
+    {"type": "out_of_scope", "question": "你怎麼看 AI 晶片股的估值？", "expected": "應標註為推斷並保留不確定性"},
+    {"type": "scenario", "question": "BTC 放量突破三週整理區上緣，資金費率中性，你怎麼做？", "expected": "小部位試單，止損設在整理區內"},
+]}
+FID_GRADES = {
+    "傑西·李佛摩": {"summary": "立場與風格都很像李佛摩；超範圍題有標註推斷", "dimensions": [
+        {"name": "立場一致性", "score": 27, "max": 30, "reason": "三題方向與細節都符合（不攤平、等待、固定止損）"},
+        {"name": "風格辨識度", "score": 16, "max": 20, "reason": "短句、關鍵點、最小阻力線等用語明顯"},
+        {"name": "邊緣誠實度", "score": 18, "max": 20, "reason": "AI 晶片題明確標註為框架推斷"},
+        {"name": "情境合理性", "score": 13, "max": 15, "reason": "突破試單、止損在整理區內，符合其方法"},
+        {"name": "結構完整度", "score": 12, "max": 15, "reason": "心智模型 5 個、決策規則 7 條、誠實邊界 3 條"}]},
+    "喬治·索羅斯": {"summary": "反身性框架掌握到位，但交易情境題的回答偏短線、不夠總經", "dimensions": [
+        {"name": "立場一致性", "score": 24, "max": 30, "reason": "反身性、易錯性立場正確；止損題細節略偏"},
+        {"name": "風格辨識度", "score": 15, "max": 20, "reason": "有「我可能是錯的」的語氣"},
+        {"name": "邊緣誠實度", "score": 17, "max": 20, "reason": "有標註推斷"},
+        {"name": "情境合理性", "score": 10, "max": 15, "reason": "應更強調流動性與政策面"},
+        {"name": "結構完整度", "score": 12, "max": 15, "reason": "結構完整"}]},
+    "查理·芒格": {"summary": "逆向思考與偏誤檢查非常到位，且誠實承認加密貨幣不在能力圈", "dimensions": [
+        {"name": "立場一致性", "score": 28, "max": 30, "reason": "反對槓桿、反對 FOMO 的立場一致"},
+        {"name": "風格辨識度", "score": 18, "max": 20, "reason": "極短句、乾燥幽默，一眼認出"},
+        {"name": "邊緣誠實度", "score": 19, "max": 20, "reason": "直接說放進太難的籃子"},
+        {"name": "情境合理性", "score": 11, "max": 15, "reason": "情境題選擇不交易，合乎其框架"},
+        {"name": "結構完整度", "score": 13, "max": 15, "reason": "完整"}]},
+    "_": {"summary": "鏈上行為證據充足，風格辨識度高", "dimensions": [
+        {"name": "立場一致性", "score": 24, "max": 30, "reason": "依鏈上紀錄推論的習慣一致"},
+        {"name": "風格辨識度", "score": 15, "max": 20, "reason": "短線、快進快出的語氣明顯"},
+        {"name": "邊緣誠實度", "score": 16, "max": 20, "reason": "有標註哪些是推斷"},
+        {"name": "情境合理性", "score": 12, "max": 15, "reason": "情境題做法與其持倉時間相符"},
+        {"name": "結構完整度", "score": 12, "max": 15, "reason": "完整"}]},
+}
+DISTILLED_PROFILE = """# 示範鏈上短線交易員 · 交易思維作業系統
+
+> 依公開貼文與 Hyperliquid 鏈上成交紀錄（最近 2,000 筆、約 90 天）提煉的框架推斷，非本人觀點。
+
+## 身份卡
+專做 BTC、ETH、SOL 永續合約的短線交易員，平均持倉 6 小時，勝率不到五成但賺大賠小。
+
+## 核心心智模型
+1. **流動性獵殺**：價格常先掃掉明顯的止損區再反轉。應用：等假突破收回再進場。局限：趨勢日會被軋。
+2. **資金費率反指標**：資金費率極端時站在擁擠方的對面。局限：強趨勢中費率可以長期極端。
+3. **時段特性**：亞洲盤整理、美股開盤後波動最大。應用：主要在 UTC 13～16 點開倉。
+
+## 決策規則
+1. 單筆風險不超過帳戶 1%
+2. 只做成交量前 5 名的幣
+3. 假突破收回前高 / 前低才進場
+4. 獲利 2R 先平一半，其餘移動止損
+5. 連虧 3 筆當天停止交易
+
+## 在加密貨幣永續合約上的應用
+本身就是永續合約交易員，槓桿 3～5 倍，重視資金費率與未平倉量變化。
+
+## 反模式（絕不做）
+- 重大數據公布前開倉
+- 做小市值幣
+- 攤平
+
+## 誠實邊界
+- 行為依鏈上紀錄推論，無法得知每筆交易的真實理由
+- 在單邊大趨勢中表現差（常逆勢）
+- 樣本只有約 90 天
+
+## 決策表達
+極短、數字化：「掃完 67.2k 收回，做多，止損 66.8k，目標 2R」。"""
 
 PINE = """//@version=5
 strategy("通道突破", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
@@ -290,6 +396,10 @@ async def fetch_history(exchange_id, inst, tf, s, e):
 backtest_routes.fetch_history = fetch_history
 settings_routes.fetch_history = fetch_history
 settings_routes.datetime = SimDT  # 審查通過時間用模擬時鐘，模擬期進度才會正確
+from goldhunter.api import persona_routes  # noqa: E402
+
+persona_routes.datetime = SimDT
+persona_routes.provider_from_config = lambda cfg: DemoAI(cfg.model or "claude-opus-5")
 
 
 async def tv_csv_for(code_md: str) -> str:
@@ -386,12 +496,21 @@ with TestClient(app) as c:
         "name": "RSI 背離（Pine 轉換）", "ai_model_id": claude["id"],
         "pine": "//@version=5\nstrategy(\"RSI 背離\")\nr = ta.rsi(close, 14)\npl = ta.pivotlow(r, 5, 5)\n// ...背離判斷..."})
     tune_ranges = {"fast": [5, 20], "slow": [20, 60]}
-    b0 = P("/bots", {"name": "AI 交易員 · 主力", "account_id": acc1["id"], "ai_model_id": claude["id"],
-                     "symbols": ["crypto:BTC/USDT:perp", "crypto:ETH/USDT:perp", "crypto:SOL/USDT:perp"],
+    personas = {p["slug"]: p for p in G("/personas") if p.get("slug")}
+    for slug in ("livermore", "soros", "munger"):
+        P(f"/personas/{personas[slug]['id']}/fidelity", {"ai_model_id": claude["id"]})
+    fx["persona_estimate"] = P("/personas/estimate", {"name": "示範鏈上短線交易員", "ai_model_id": claude["id"],
+                                                      "depth": "standard"})
+    fx["distill_result"] = P("/personas/distill", {"name": "示範鏈上短線交易員", "ai_model_id": claude["id"],
+                                                   "depth": "quick", "role": "trader", "markets": ["crypto"]})
+    b0 = P("/bots", {"name": "AI 交易員 · 李佛摩 × 芒格審查", "account_id": acc1["id"], "ai_model_id": claude["id"],
+                     "symbols": [], "universe": {"mode": "rules", "top_n": 3, "exclude_meme": True},
                      "timeframe": "1h", "interval_sec": 60, "risk": {"max_leverage": 3, "max_position_pct": 15},
                      "copilot": {"review": False, "manage": False, "tune": False, "event_blackout_min": 60},
                      "ai_trader": {"instructions": "順勢交易為主，不逆勢抄底；重大數據公布前不開新倉；單筆最多 15% 資金、最多 3 倍槓桿。",
-                                   "reference_strategy_id": st_ma["id"], "min_confidence": 0.6}})
+                                   "reference_strategy_id": st_ma["id"], "min_confidence": 0.6,
+                                   "persona_id": personas["livermore"]["id"],
+                                   "reviewer_ids": [personas["munger"]["id"]], "veto_rule": "any"}})
     b1 = P("/bots", {"name": "BTC 均線 + AI 審核", "account_id": acc1["id"], "strategy_id": st_ma["id"],
                      "ai_model_id": claude["id"], "symbols": ["crypto:BTC/USDT:perp"], "timeframe": "15m",
                      "interval_sec": 60, "risk": {"max_leverage": 3, "max_position_pct": 25},
@@ -465,6 +584,8 @@ with TestClient(app) as c:
     fx["backtests"] = G("/backtests")
     fx["backtest_detail"] = {str(x["id"]): G(f"/backtests/{x['id']}") for x in fx["backtests"]}
     fx["backtest_run"] = bt_main
+    fx["personas"] = G("/personas")
+    fx["persona_detail"] = {str(p["id"]): G(f"/personas/{p['id']}") for p in fx["personas"]}
     fx["intel_settings"] = G("/intel/settings")
     fx["intel_snapshot"] = G("/intel/snapshot?symbol=crypto:BTC/USDT:perp&exchange_id=binance")
     fx["generated_at"] = REAL_NOW.isoformat()
