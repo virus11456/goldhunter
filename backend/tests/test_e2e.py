@@ -381,3 +381,79 @@ def test_personas_api_lifecycle_and_universe(client):
     # 手動開放實盤
     assert client.post(f"/api/personas/{up['id']}/promote", headers=H).json()["status"] == "active"
     assert client.delete(f"/api/personas/{names['munger']['id']}", headers=H).status_code == 400  # 內建不可刪
+
+
+def test_smart_entry_waits_then_fills_or_expires(client):
+    """智慧進場：訊號出現先掛單等待，碰到點位才進場；逾時則取消"""
+    from goldhunter.analysis.entry import EntryAnalysis, EntryCandidate
+    from goldhunter.engine import bot as bot_mod
+
+    bot = _setup_bot(client, {"review": False, "manage": False, "event_blackout_min": 0})
+    client.put(f"/api/bots/{bot['id']}", headers=H, json={
+        "name": "b", "account_id": bot["account_id"], "strategy_id": bot["strategy_id"], "ai_model_id": bot["ai_model_id"],
+        "symbols": bot["symbols"], "timeframe": "1h", "interval_sec": 3600, "risk": {"max_leverage": 3},
+        "copilot": {"review": False, "manage": False, "event_blackout_min": 0},
+        "entry": {"mode": "smart", "max_wait_bars": 3}})
+    assert client.get("/api/bots", headers=H).json()[-1]["entry"]["mode"] == "smart"
+
+    level = {"v": None}
+
+    def fake_analyze(candles, timeframe, direction, stop=None, target=None, signal_idx=None):
+        p = candles[-1].close
+        lv = p + 50 if direction == "long" else p - 50  # 測試用：下一根一定碰得到，專門驗證成交流程
+        if level["v"] == "far":
+            lv = p * 0.5 if direction == "long" else p * 1.5  # 永遠碰不到
+        return EntryAnalysis(direction=direction, price=p, atr=1, stop=p * (0.9 if direction == "long" else 1.1),
+                             target=p * (1.2 if direction == "long" else 0.8), stop_source="x", target_source="x",
+                             candidates=[EntryCandidate(key="market", label="市價", price=p, rr=2, fill_prob=1,
+                                                        win_prob=0.4, ev_r=0.2, ev_per_signal=0.2),
+                                         EntryCandidate(key="ema20", label="等回檔到 EMA20", price=lv, rr=3,
+                                                        fill_prob=0.7, win_prob=0.4, ev_r=0.6, ev_per_signal=0.42)],
+                             recommended="ema20", recommendation="等回檔", wait_bars=12, signal_samples=20,
+                             sample_basis="測試", high_frequency=False)
+
+    orig = bot_mod.analyze_entry
+    bot_mod.analyze_entry = fake_analyze
+    try:
+        client.post(f"/api/bots/{bot['id']}/start", headers=H)
+        runner = _tick(client, bot["id"], 60)
+        decisions = client.get(f"/api/decisions?bot_id={bot['id']}&limit=500", headers=H).json()
+        waits = [d for d in decisions if any(r.startswith("等待進場") for r in d["reasons"])]
+        fills = [d for d in decisions if d["approved"] and any(r.startswith("掛單成交") for r in d["reasons"])]
+        assert waits and fills, "應先等待、再掛單成交"
+        assert "entry_analysis" in fills[0]["decision"]
+        client.post(f"/api/bots/{bot['id']}/stop", headers=H)
+
+        # 永遠碰不到 → 逾時取消
+        level["v"] = "far"
+        client.post(f"/api/bots/{bot['id']}/start", headers=H)
+        runner = manager.runners[bot["id"]]
+        runner.exchange.i = 300
+        _tick(client, bot["id"], 60)
+        decisions = client.get(f"/api/decisions?bot_id={bot['id']}&limit=1000", headers=H).json()
+        assert any(any("逾時未成交" in r for r in d["reasons"]) for d in decisions)
+        assert runner.pending is not None
+        client.post(f"/api/bots/{bot['id']}/stop", headers=H)
+    finally:
+        bot_mod.analyze_entry = orig
+
+
+def test_entry_analysis_endpoints(client, monkeypatch):
+    from goldhunter.api import analysis_routes
+
+    async def fetch_history(exchange_id, inst, tf, s, e):
+        return make_candles(800, period=40, amp=15)
+
+    monkeypatch.setattr(analysis_routes, "fetch_history", fetch_history)
+    st = client.post("/api/strategies", headers=H, json={"name": "ma", "kind": "ma_cross",
+                                                        "params": {"fast": 5, "slow": 15}}).json()
+    r = client.post("/api/analysis/entry", headers=H, json={"strategy_id": st["id"], "direction": "long"}).json()
+    assert r["analysis"]["candidates"][0]["key"] == "market"
+    assert r["analysis"]["recommendation"]
+
+    bot = _setup_bot(client, {"review": False, "manage": False, "event_blackout_min": 0})
+    client.post(f"/api/bots/{bot['id']}/start", headers=H)
+    _tick(client, bot["id"], 2)
+    e = client.get(f"/api/bots/{bot['id']}/entry-analysis?direction=short", headers=H).json()
+    assert e["entry"]["mode"] == "market" and e["items"][0]["analysis"]["direction"] in ("long", "short")
+    client.post(f"/api/bots/{bot['id']}/stop", headers=H)

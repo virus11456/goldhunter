@@ -65,7 +65,7 @@ class BotManager:
             instruments=[Instrument.parse(s) for s in bot.symbols], timeframe=bot.timeframe,
             interval_sec=bot.interval_sec, risk=RiskConfig(**(bot.risk or {})), ai=ai,
             copilot=CopilotConfig(**(bot.copilot or {})), exchange_id=acc.exchange_id, strategy_id=strat_cfg.id,
-            universe=bot.universe or {},
+            universe=bot.universe or {}, entry=bot.entry or {},
         )
 
     async def start(self, bot_id: int) -> BotRunner:

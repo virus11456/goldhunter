@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, col, func, select
 
+from goldhunter.analysis.config import EntryConfig
 from goldhunter.copilot.config import CopilotConfig
 from goldhunter.core.models import Action, Decision, Instrument
 from goldhunter.engine.manager import manager
@@ -43,6 +44,7 @@ class BotIn(BaseModel):
     copilot: dict[str, Any] = {}
     params_override: dict[str, Any] = {}
     universe: dict[str, Any] = {}
+    entry: dict[str, Any] = {}
 
 
 def bot_out(b: Bot, s: Session) -> dict:
@@ -60,6 +62,11 @@ def bot_out(b: Bot, s: Session) -> dict:
     )
     d["running"] = bool(runner and runner.running)
     d["copilot"] = CopilotConfig(**(b.copilot or {})).model_dump()
+    d["entry"] = EntryConfig(**(b.entry or {})).model_dump()
+    d["pending_entries"] = (
+        [{"instrument": str(i), "level": pe.level, "label": pe.label, "bars_left": pe.bars_left,
+          "action": pe.decision.action.value} for i, pe in runner.pending.items()] if runner else []
+    )
     cp = d["copilot"]
     # 設定上有開啟 AI 副駕駛（不論是否運行中）；copilot_active＝目前正在運作
     d["copilot_enabled"] = bool(b.ai_model_id and (cp["review"] or cp["manage"] or cp["tune"]))
@@ -105,6 +112,7 @@ def _validate(body: BotIn) -> None:
         RiskConfig(**body.risk)
         CopilotConfig(**body.copilot)
         UniverseRules(**body.universe)
+        EntryConfig(**body.entry)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     if not body.symbols and (body.universe or {}).get("mode") != "rules":
@@ -122,8 +130,9 @@ def list_bots(s: Session = Depends(get_session)):
 def create_bot(body: BotIn, s: Session = Depends(get_session)):
     _validate(body)
     _ensure_strategy(body, s)
-    b = Bot(**body.model_dump(exclude={"risk", "copilot", "ai_trader", "universe"}), risk=RiskConfig(**body.risk).model_dump(),
+    b = Bot(**body.model_dump(exclude={"risk", "copilot", "ai_trader", "universe", "entry"}), risk=RiskConfig(**body.risk).model_dump(),
             universe=UniverseRules(**body.universe).model_dump() if body.universe else {},
+            entry=EntryConfig(**body.entry).model_dump(),
             copilot=CopilotConfig(**body.copilot).model_dump())
     s.add(b)
     s.commit()
@@ -138,8 +147,9 @@ def update_bot(bot_id: int, body: BotIn, s: Session = Depends(get_session)):
         raise HTTPException(400, "請先停止 Bot 再修改設定")
     _validate(body)
     _ensure_strategy(body, s, existing=b)
-    for k, v in body.model_dump(exclude={"ai_trader", "universe"}).items():
+    for k, v in body.model_dump(exclude={"ai_trader", "universe", "entry"}).items():
         setattr(b, k, v)
+    b.entry = EntryConfig(**body.entry).model_dump()
     b.universe = UniverseRules(**body.universe).model_dump() if body.universe else {}
     b.risk = RiskConfig(**body.risk).model_dump()
     b.copilot = CopilotConfig(**body.copilot).model_dump()

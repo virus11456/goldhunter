@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
 from goldhunter.api import (
+    analysis_routes,
     backtest_routes,
     bot_routes,
     intel_routes,
@@ -60,6 +61,7 @@ app.include_router(bot_routes.router, prefix="/api", dependencies=auth, tags=["b
 app.include_router(backtest_routes.router, prefix="/api", dependencies=auth, tags=["backtest"])
 app.include_router(intel_routes.router, prefix="/api", dependencies=auth, tags=["intel"])
 app.include_router(persona_routes.router, prefix="/api", dependencies=auth, tags=["personas"])
+app.include_router(analysis_routes.router, prefix="/api", dependencies=auth, tags=["analysis"])
 app.include_router(tradingview_routes.router, prefix="/api", tags=["tradingview"])
 
 

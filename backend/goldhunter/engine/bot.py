@@ -20,6 +20,8 @@ from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
 from goldhunter.ai.base import AIProvider, AIProviderError
+from goldhunter.analysis.config import EntryConfig
+from goldhunter.analysis.entry import EntryAnalysis, analyze_entry, strategy_signal_indices
 from goldhunter.copilot.config import CopilotConfig
 from goldhunter.copilot.review import manage_position, review_signal
 from goldhunter.copilot.tune import tune_strategy
@@ -37,6 +39,19 @@ log = logging.getLogger("goldhunter.bot")
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+class PendingEntry(BaseModel):
+    """等待中的進場掛單（由引擎監控：價格碰到就市價進場，所有交易所行為一致）"""
+
+    model_config = {"arbitrary_types_allowed": True}
+    decision: Decision
+    level: float
+    label: str
+    bars_left: int
+    ai_result: object | None = None
+    extra: dict = {}
+    extra_reasons: list[str] = []
 
 
 class StopLevels(BaseModel):
@@ -73,6 +88,7 @@ class BotRunner:
         exchange_id: str = "binance",
         strategy_id: int | None = None,
         universe: dict | None = None,
+        entry: dict | None = None,
     ):
         self.bot_id = bot_id
         self.name = name
@@ -87,6 +103,8 @@ class BotRunner:
         self.exchange_id = exchange_id.split(":")[-1]
         self.strategy_id = strategy_id
         self.universe = UniverseRules(**(universe or {}))
+        self.entry = EntryConfig(**(entry or {}))
+        self.pending: dict[Instrument, PendingEntry] = {}
         self.base_instruments = list(instruments)
         self.universe_at: datetime | None = None
         self.risk_state = RiskState()
@@ -164,6 +182,7 @@ class BotRunner:
                     self.baseline.set_price(inst, price)
                     await self._baseline_check_stops(inst, price)
                 await self._check_stops(inst, price)
+                await self._check_pending(inst, candles)
 
                 closed = candles[:-1]  # 最後一根尚未收盤
                 pos = await self._position(inst)
@@ -226,6 +245,8 @@ class BotRunner:
     async def _process_signal(self, decision: Decision, ctx: StrategyContext, price: float, ai_result=None) -> None:
         opening = decision.action in (Action.OPEN_LONG, Action.OPEN_SHORT)
         if not opening:
+            if decision.action == Action.CLOSE:
+                self.pending.pop(decision.instrument, None)  # 出場訊號取消尚未成交的進場掛單
             await self._handle(decision, price=price, ai_result=ai_result)
             return
         intel: IntelSnapshot | None = None
@@ -249,11 +270,74 @@ class BotRunner:
                 self._log_rejected(decision, [f"AI 否決：{out.reasoning}", *out.notes], ai_result=out.ai,
                                    extra={"copilot": review_info})
                 return
-            await self._handle(out.decision, price=price, ai_result=out.ai,
-                               extra_reasons=[f"AI {'調整' if out.verdict == 'adjust' else '放行'}", *out.notes],
-                               extra={"copilot": review_info})
+            await self._open(out.decision, price=price, closed=ctx.candles, ai_result=out.ai,
+                             extra_reasons=[f"AI {'調整' if out.verdict == 'adjust' else '放行'}", *out.notes],
+                             extra={"copilot": review_info})
             return
-        await self._handle(decision, price=price, ai_result=ai_result)
+        await self._open(decision, price=price, closed=ctx.candles, ai_result=ai_result)
+
+    # ---------- 進場分析與掛單等待 ----------
+    async def _analyze(self, decision: Decision, closed) -> EntryAnalysis | None:
+        direction = "long" if decision.action == Action.OPEN_LONG else "short"
+        try:
+            hist = (await self.exchange.fetch_candles(decision.instrument, self.timeframe, 1000))[:-1]
+            if len(hist) < len(closed):
+                hist = closed
+            sig: list[int] = []
+            if self.strategy is not None and not self.strategy.uses_ai:
+                sig = await strategy_signal_indices(type(self.strategy)(dict(self.strategy.params)),
+                                                    decision.instrument, self.timeframe, hist, direction)
+            return analyze_entry(hist, self.timeframe, direction, decision.stop_loss, decision.take_profit, sig)
+        except Exception as e:
+            log.warning("bot %s 進場分析失敗：%s", self.bot_id, e)
+            return None
+
+    async def _open(self, decision: Decision, *, price: float, closed, ai_result=None,
+                    extra_reasons: list[str] | None = None, extra: dict | None = None) -> None:
+        inst = decision.instrument
+        self.pending.pop(inst, None)  # 新訊號取代舊的掛單
+        analysis = await self._analyze(decision, closed)
+        extra = dict(extra or {})
+        if analysis:
+            extra["entry_analysis"] = analysis.model_dump()
+        smart = self.entry.mode == "smart" and analysis is not None
+        if smart and analysis.recommended == "skip" and self.entry.skip_negative_ev:
+            self._log_rejected(decision, [f"進場分析：{analysis.recommendation}", *(extra_reasons or [])],
+                               ai_result=ai_result, extra=extra)
+            return
+        if smart and analysis.recommended not in ("market", "skip"):
+            cand = next(c for c in analysis.candidates if c.key == analysis.recommended)
+            d = decision.model_copy()
+            d.stop_loss = d.stop_loss or analysis.stop
+            d.take_profit = d.take_profit or analysis.target
+            wait = self.entry.max_wait_bars or analysis.wait_bars
+            self.pending[inst] = PendingEntry(decision=d, level=cand.price, label=cand.label, bars_left=wait,
+                                              ai_result=ai_result, extra=extra,
+                                              extra_reasons=[*(extra_reasons or []), f"掛單成交：{cand.label} {cand.price:.6g}"])
+            self._log_rejected(decision, [f"等待進場：{cand.label} {cand.price:.6g}（盈虧比 1:{cand.rr}、"
+                                          f"約 {cand.fill_prob:.0%} 機率等得到，{wait} 根 K 棒內沒成交就取消）",
+                                          *(extra_reasons or [])],
+                               ai_result=ai_result, extra={**extra, "pending": True})
+            return
+        await self._handle(decision, price=price, ai_result=ai_result, extra_reasons=extra_reasons, extra=extra)
+
+    async def _check_pending(self, inst: Instrument, candles) -> None:
+        pe = self.pending.get(inst)
+        if not pe:
+            return
+        bar, price = candles[-1], candles[-1].close
+        long = pe.decision.action == Action.OPEN_LONG
+        touched = (long and bar.low <= pe.level) or (not long and bar.high >= pe.level)
+        if touched:
+            self.pending.pop(inst, None)
+            await self._handle(pe.decision, price=price, ai_result=pe.ai_result, extra_reasons=pe.extra_reasons,
+                               extra=pe.extra)
+            return
+        if self.last_bar.get(inst) != candles[-2].ts:  # 每根新 K 棒扣一次
+            pe.bars_left -= 1
+        if pe.bars_left <= 0:
+            self.pending.pop(inst, None)
+            self._log_rejected(pe.decision, [f"掛單逾時未成交，已取消（{pe.label} {pe.level:.6g}）"], extra=pe.extra)
 
     async def _maybe_manage(self, inst: Instrument, pos: Position, closed, price: float) -> None:
         last = self.last_manage.get(inst)
