@@ -912,6 +912,27 @@ export interface BacktestRun extends BacktestSummary {
 }
 
 // ------------------------------ Endpoints ------------------------------
+/** 連線檢查（backend diagnostics.py） */
+export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip'
+export interface CheckItem {
+  name: string
+  status: CheckStatus | string
+  detail: string
+  ms: number | null
+}
+export interface CheckGroup {
+  key: string
+  label: string
+  note: string
+  items: CheckItem[]
+}
+export interface DiagnosticsResult {
+  checked_at: string
+  duration_ms: number
+  summary: Record<CheckStatus, number>
+  groups: CheckGroup[]
+}
+
 export const api = {
   health: () => request<{ ok: boolean }>('GET', '/health', undefined, false),
   meta: () => get<Meta>('/meta'),
@@ -964,6 +985,9 @@ export const api = {
   portfolioPlan: (id: number, ai_model_id: number) => post<PortfolioPlan>(`/personas/${id}/portfolio-plan`, { ai_model_id }),
   createPortfolio: (id: number, b: PortfolioIn) => post<PortfolioResult>(`/personas/${id}/portfolio`, b),
   masters: () => get<MasterPortfolio[]>('/masters'),
+
+  // 連線檢查（只讀取、不下單）
+  diagnostics: (include_ai: boolean) => post<DiagnosticsResult>('/diagnostics', { include_ai }),
 
   // entry analysis（進場分析）
   entryAnalysis: (b: EntryIn) => post<EntryResult>('/analysis/entry', b),

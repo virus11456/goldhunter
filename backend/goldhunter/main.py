@@ -15,6 +15,7 @@ from goldhunter.api import (
     analysis_routes,
     backtest_routes,
     bot_routes,
+    diagnostics_routes,
     intel_routes,
     persona_routes,
     settings_routes,
@@ -58,6 +59,7 @@ app.include_router(backtest_routes.router, prefix="/api", dependencies=auth, tag
 app.include_router(intel_routes.router, prefix="/api", dependencies=auth, tags=["intel"])
 app.include_router(persona_routes.router, prefix="/api", dependencies=auth, tags=["personas"])
 app.include_router(analysis_routes.router, prefix="/api", dependencies=auth, tags=["analysis"])
+app.include_router(diagnostics_routes.router, prefix="/api", dependencies=auth, tags=["diagnostics"])
 app.include_router(tradingview_routes.router, prefix="/api", tags=["tradingview"])
 
 

@@ -518,5 +518,20 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
     return run
   }
 
+  // ---- 連線檢查：展示模式沒有後端，不假造檢查結果 ----
+  if (seg[0] === 'diagnostics') {
+    await wait(800)
+    const skip = (name: string) => ({ name, status: 'skip', detail: '展示模式沒有後端，無法連線檢查。部署到自己的主機後，這裡會顯示真實的連線結果。', ms: null })
+    return {
+      checked_at: now(), duration_ms: 800, summary: { ok: 0, warn: 0, fail: 0, skip: 4 },
+      groups: [
+        { key: 'public', label: '交易所公開行情', note: '不需要 API Key；回測與模擬帳戶都用這裡的資料', items: [skip('Binance / OKX / Bybit / Hyperliquid')] },
+        { key: 'accounts', label: '交易所帳戶', note: '只讀取餘額與持倉，不會下單', items: [skip('API Key / 餘額 / 持倉')] },
+        { key: 'ai', label: 'AI 模型', note: '每個模型送一次極短的測試請求（費用極少）', items: [skip('AI 模型')] },
+        { key: 'sources', label: '市場情報資料來源', note: '新聞、總經、情緒與合約數據', items: [skip('恐懼貪婪 / 新聞 / 經濟日曆 / FRED')] },
+      ],
+    }
+  }
+
   throw new ApiError(404, `展示模式未支援：${method} ${path}`)
 }

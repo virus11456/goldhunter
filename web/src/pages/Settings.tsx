@@ -2,6 +2,7 @@ import { useSearchParams } from 'react-router-dom'
 import Accounts from './settings/Accounts'
 import AIModels from './settings/AIModels'
 import Bots from './settings/Bots'
+import Diagnostics from './settings/Diagnostics'
 import Intel from './settings/Intel'
 import Personas from './settings/Personas'
 import Strategies from './settings/Strategies'
@@ -13,6 +14,7 @@ const TABS = [
   { id: 'strategies', label: '策略' },
   { id: 'bots', label: 'Bots 機器人' },
   { id: 'intel', label: '資料來源' },
+  { id: 'diagnostics', label: '連線檢查' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -40,6 +42,7 @@ export default function Settings() {
         {tab === 'strategies' && <Strategies />}
         {tab === 'bots' && <Bots />}
         {tab === 'intel' && <Intel />}
+        {tab === 'diagnostics' && <Diagnostics />}
       </div>
     </div>
   )
