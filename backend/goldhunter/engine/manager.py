@@ -23,10 +23,11 @@ from goldhunter.strategies.registry import attach_reference, build_strategy
 log = logging.getLogger("goldhunter.manager")
 
 
-def exchange_from_account(acc: ExchangeAccount) -> ExchangeAdapter:
+def exchange_from_account(acc: ExchangeAccount, capital: float | None = None) -> ExchangeAdapter:
     return build_exchange(
         acc.exchange_id, api_key=decrypt(acc.api_key_enc), secret=decrypt(acc.secret_enc),
-        passphrase=decrypt(acc.passphrase_enc), testnet=acc.testnet, paper=acc.paper, paper_cash=acc.paper_cash,
+        passphrase=decrypt(acc.passphrase_enc), testnet=acc.testnet, paper=acc.paper,
+        paper_cash=capital or acc.paper_cash,
     )
 
 
@@ -61,7 +62,7 @@ class BotManager:
         if not bot.symbols and (bot.universe or {}).get("mode") != "rules":
             raise ValueError("Bot 至少需要一個交易對")
         return BotRunner(
-            bot_id=bot.id, name=bot.name, exchange=exchange_from_account(acc), strategy=strategy,  # type: ignore[arg-type]
+            bot_id=bot.id, name=bot.name, exchange=exchange_from_account(acc, bot.capital), strategy=strategy,  # type: ignore[arg-type]
             instruments=[Instrument.parse(s) for s in bot.symbols], timeframe=bot.timeframe,
             interval_sec=bot.interval_sec, risk=RiskConfig(**(bot.risk or {})), ai=ai,
             copilot=CopilotConfig(**(bot.copilot or {})), exchange_id=acc.exchange_id, strategy_id=strat_cfg.id,

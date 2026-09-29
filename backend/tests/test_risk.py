@@ -86,3 +86,15 @@ def test_order_rate_limit():
 def test_min_confidence():
     d = Decision(instrument=BTC_PERP, action=Action.OPEN_LONG, size_pct=10, stop_loss=95, confidence=0.3)
     assert not run(d, config=RiskConfig(min_confidence=0.5)).approved
+
+
+def test_max_positions_and_long_only():
+    eth = BTC_PERP.model_copy(update={"symbol": "ETH/USDT"})
+    held = [Position(instrument=eth, quantity=1, entry_price=100)]
+    d = Decision(instrument=BTC_PERP, action=Action.OPEN_LONG, size_pct=10)
+    r = run(d, config=RiskConfig(max_positions=1), positions=held)
+    assert not r.approved and any("組合上限" in x for x in r.reasons)
+    assert run(d, config=RiskConfig(max_positions=2), positions=held).approved
+    s = Decision(instrument=BTC_PERP, action=Action.OPEN_SHORT, size_pct=10)
+    r = run(s, config=RiskConfig(long_only=True))
+    assert not r.approved and any("只做多" in x for x in r.reasons)

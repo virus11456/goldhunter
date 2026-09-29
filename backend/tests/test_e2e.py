@@ -21,8 +21,8 @@ H = {"Authorization": "Bearer test-token"}
 class FeedExchange(PaperExchange):
     """假行情：每次 fetch_candles 前進一根 K 線"""
 
-    def __init__(self, candles: list[Candle]):
-        super().__init__(initial_cash=10_000, fee_rate=0.0005, slippage=0.0)
+    def __init__(self, candles: list[Candle], cash: float = 10_000):
+        super().__init__(initial_cash=cash, fee_rate=0.0005, slippage=0.0)
         self.all = candles
         self.i = 120
 
@@ -37,8 +37,8 @@ class FeedExchange(PaperExchange):
 def client(monkeypatch):
     feed = {"ex": None}
 
-    def fake_exchange(acc):
-        feed["ex"] = FeedExchange(make_candles(600, period=40, amp=15))
+    def fake_exchange(acc, capital=None):
+        feed["ex"] = FeedExchange(make_candles(600, period=40, amp=15), capital or 10_000)
         return feed["ex"]
 
     ai = FakeAI([])
@@ -313,74 +313,82 @@ def test_pine_auto_review_lifecycle(client, monkeypatch):
     assert fixed["review"]["passed"] and fixed["strategy"]["status"] == "paper_only"
 
 
-def test_personas_api_lifecycle_and_universe(client):
-    from .test_personas import OPEN, SKILL_MD, b64
+def test_personas_upload_and_master_portfolio(client):
+    """上傳女媧檔案 → 保真度達標進模擬期 → AI 設計組合計畫 → 建立並啟動大師組合 → 大師組合總覽"""
+    from .test_personas import FIDELITY_MD, OPEN, SKILL_MD, _zip, b64
 
-    ps = client.get("/api/personas", headers=H).json()
-    names = {p["slug"]: p for p in ps if p["slug"]}
-    assert set(names) >= {"livermore", "soros", "munger", "buffett"}
-    assert names["munger"]["role"] == "reviewer" and names["livermore"]["status"] == "draft"
-
-    up = client.post("/api/personas/upload", headers=H,
-                     json={"filename": "SKILL.md", "content_base64": b64(SKILL_MD)}).json()
-    assert up["name"] == "測試交易員" and up["source"] == "upload" and up["status"] == "draft"
+    assert client.get("/api/personas", headers=H).json() == []  # 沒有內建大師
+    low = client.post("/api/personas/upload", headers=H,
+                      json={"filename": "SKILL.md", "content_base64": b64(SKILL_MD),
+                            "fidelity_filename": "FIDELITY.md",
+                            "fidelity_base64": b64(FIDELITY_MD.replace("82/100 · 等级 B", "60/100 · 等级 C"))}).json()
+    assert low["status"] == "draft" and low["fidelity"]["score"] == 60
+    assert client.post(f"/api/personas/{low['id']}/promote", headers=H).status_code == 400
+    up = client.post("/api/personas/upload", headers=H, json={
+        "filename": "t.zip", "content_base64": b64(_zip({"t/SKILL.md": SKILL_MD, "t/FIDELITY.md": FIDELITY_MD}))}).json()
+    assert up["name"] == "测试交易员" and up["source"] == "nuwa" and up["status"] == "paper_only"
+    assert up["fidelity"]["score"] == 82 and "核心心智模型" in up["meta"]["kept_sections"]
+    assert "raw_skill" not in client.get("/api/personas", headers=H).json()[1]["meta"]
+    assert client.post("/api/personas/upload", headers=H,
+                       json={"filename": "x.exe", "content_base64": b64("MZ")}).status_code == 400
 
     ai = client.post("/api/ai-models", headers=H, json={"name": "c", "provider": "anthropic", "api_key": "k"}).json()
-    est = client.post("/api/personas/estimate", headers=H, json={"name": "某交易員", "ai_model_id": ai["id"]}).json()
-    assert est["usd"] > 0 and est["web_searches"] > 0
-
     from goldhunter.api import persona_routes
     persona_routes.provider_from_config = lambda cfg: client.ai
-    client.ai.replies = [
-        {"questions": [{"type": "stance", "question": "q", "expected": "e"}]},
-        {"answers": ["a"]},
-        {"summary": "ok", "dimensions": [{"name": "立場一致性", "score": 80, "max": 100, "reason": ""}]},
-    ]
-    fid = client.post(f"/api/personas/{up['id']}/fidelity", headers=H, json={"ai_model_id": ai["id"]}).json()
-    assert fid["fidelity"]["score"] == 80 and fid["status"] == "paper_only"
-    assert fid["paper_progress"]["days_required"] == 7
+    client.ai.replies = [{"suitable": True, "style_summary": "順勢", "reason": "r", "timeframe": "1h",
+                          "holding_period": "數天", "universe": {"mode": "rules", "top_n": 2, "exclude_meme": True,
+                                                              "include_only": [], "symbols": []},
+                          "max_positions": 1, "position_pct": 10, "max_leverage": 2, "allow_short": False,
+                          "entry_mode": "market", "instructions": "只做突破"}]
+    plan = client.post(f"/api/personas/{up['id']}/portfolio-plan", headers=H, json={"ai_model_id": ai["id"]}).json()
+    assert plan["timeframe"] == "1h" and plan["max_positions"] == 1
 
-    # 實盤帳戶：大師還在模擬期 → 拒絕；模擬帳戶 → 可以
     live = client.post("/api/accounts", headers=H, json={"name": "l", "exchange_id": "binance", "paper": False,
                                                          "api_key": "k", "secret": "s"}).json()
     paper = client.post("/api/accounts", headers=H, json={"name": "p", "exchange_id": "binance"}).json()
-    body = {"name": "大師 Bot", "ai_model_id": ai["id"], "symbols": [], "timeframe": "1h", "interval_sec": 3600,
-            "universe": {"mode": "rules", "top_n": 2, "exclude_meme": True},
-            "ai_trader": {"instructions": "", "persona_id": up["id"], "reviewer_ids": [names["munger"]["id"]]}}
-    b_live = client.post("/api/bots", headers=H, json={**body, "account_id": live["id"]}).json()
-    r = client.post(f"/api/bots/{b_live['id']}/start", headers=H)
-    assert r.status_code == 400 and "模擬期" in r.json()["detail"]
-    b = client.post("/api/bots", headers=H, json={**body, "account_id": paper["id"]}).json()
-    assert b["universe"]["mode"] == "rules" and b["ai_trader"]["persona_id"] == up["id"]
-
-    async def vols():
-        return [("DOGE", 9e9), ("BTC", 5e9), ("ETH", 4e9), ("SOL", 1e9)]
+    r = client.post(f"/api/personas/{up['id']}/portfolio", headers=H,
+                    json={"ai_model_id": ai["id"], "account_id": live["id"], "plan": plan}).json()
+    assert not r["started"] and "模擬期" in r["error"]  # 大師還在模擬期 → 實盤不可啟動
 
     captured = []
 
     async def ai_json(system, user, schema):
         from goldhunter.ai.base import AIResult
         captured.append(system)
-        d = {"verdict": "veto", "reasoning": "槓桿追高，蠢事"} if "審查委員" in system else OPEN
-        return AIResult(decision=d, raw_text="{}", model="fake")
+        return AIResult(decision=OPEN, raw_text="{}", model="fake")
 
     client.ai.complete_json = ai_json
-    assert client.post(f"/api/bots/{b['id']}/start", headers=H).status_code == 200
-    runner = manager.runners[b["id"]]
+    r = client.post(f"/api/personas/{up['id']}/portfolio", headers=H,
+                    json={"ai_model_id": ai["id"], "account_id": paper["id"], "plan": plan, "capital": 5000}).json()
+    assert r["started"], r
+    bid = r["bot_id"]
+    bot = next(b for b in client.get("/api/bots", headers=H).json() if b["id"] == bid)
+    assert bot["ai_trader"]["persona_id"] == up["id"] and bot["universe"]["mode"] == "rules"
+    assert bot["risk"]["long_only"] and bot["risk"]["max_positions"] == 1
+
+    async def vols():
+        return [("DOGE", 9e9), ("BTC", 5e9), ("ETH", 4e9), ("SOL", 1e9)]
+
+    runner = manager.runners[bid]
     runner.exchange.perp_volumes = vols
     runner.universe_at = None
-    _tick(client, b["id"], 2)
+    _tick(client, bid, 3)
     assert [i.symbol for i in runner.instruments] == ["BTC/USDT", "ETH/USDT"]  # 規則挑選、排除迷因幣
-    assert any("你的交易大腦：測試交易員" in sp for sp in captured)
-    dec = client.get(f"/api/decisions?bot_id={b['id']}", headers=H).json()
-    vetoed = [d for d in dec if (d["decision"].get("meta") or {}).get("committee", {}).get("vetoed")]
-    assert vetoed and vetoed[0]["decision"]["meta"]["committee"]["opinions"][0]["name"] == "查理·芒格"
-    assert not client.get(f"/api/trades?bot_id={b['id']}", headers=H).json()  # 全被芒格否決
-    client.post(f"/api/bots/{b['id']}/stop", headers=H)
+    assert any("你的交易大腦：测试交易员" in sp for sp in captured)
+    trades = client.get(f"/api/trades?bot_id={bid}", headers=H).json()
+    assert len({t["instrument"] for t in trades}) == 1  # 組合最多持有 1 個標的
+    dec = client.get(f"/api/decisions?bot_id={bid}", headers=H).json()
+    assert any("組合上限" in " ".join(d.get("reasons") or []) for d in dec)
 
-    # 手動開放實盤
+    masters = client.get("/api/masters", headers=H).json()
+    m = next(x for x in masters if x["bot_id"] == bid)
+    assert m["persona"]["name"] == "测试交易员" and m["running"] and m["start_equity"] == pytest.approx(5000, rel=0.01)
+    assert m["plan"]["style_summary"] == "順勢" and m["curve"]
+    client.post(f"/api/bots/{bid}/stop", headers=H)
+
+    assert client.delete(f"/api/personas/{up['id']}", headers=H).status_code == 400  # 仍有組合在用
     assert client.post(f"/api/personas/{up['id']}/promote", headers=H).json()["status"] == "active"
-    assert client.delete(f"/api/personas/{names['munger']['id']}", headers=H).status_code == 400  # 內建不可刪
+    assert client.delete(f"/api/personas/{low['id']}", headers=H).json() == {"ok": True}
 
 
 def test_smart_entry_waits_then_fills_or_expires(client):

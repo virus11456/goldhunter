@@ -24,6 +24,8 @@ class RiskConfig(BaseModel):
     min_confidence: float = Field(default=0.0, ge=0, le=1)
     max_orders_per_hour: int = 20
     allow_pyramiding: bool = False  # 同方向是否允許加碼
+    max_positions: int = Field(default=0, ge=0, description="最多同時持有幾個標的；0＝不限")
+    long_only: bool = False  # 只做多（例如價值投資風格的大師）
 
 
 class RiskResult(BaseModel):
@@ -102,6 +104,11 @@ def evaluate(
         reasons.append("非交易時段")
     if not want_long and not capabilities.supports_short:
         reasons.append("此市場不支援放空")
+    if not want_long and config.long_only:
+        reasons.append("此組合設定只做多")
+    held = [p for p in all_positions if p.quantity and p.instrument != inst]
+    if config.max_positions and cur == 0 and len(held) >= config.max_positions:
+        reasons.append(f"已持有 {len(held)} 個標的，達到組合上限 {config.max_positions}")
     if (want_long and cur > 0) or (not want_long and cur < 0):
         if not config.allow_pyramiding:
             return RiskResult(approved=False, reasons=["已有同方向持倉，不加碼"])

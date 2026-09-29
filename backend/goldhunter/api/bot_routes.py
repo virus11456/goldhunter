@@ -26,9 +26,7 @@ class AITraderIn(BaseModel):
     instructions: str = ""
     reference_strategy_id: int | None = None
     min_confidence: float = 0.6
-    persona_id: int | None = None  # 交易大腦（投資大師）
-    reviewer_ids: list[int] = []  # 審查委員（投資大師）
-    veto_rule: str = "any"  # any / majority
+    persona_id: int | None = None  # 交易大腦（女媧蒸餾的投資大師）
 
 
 class BotIn(BaseModel):
@@ -45,6 +43,7 @@ class BotIn(BaseModel):
     params_override: dict[str, Any] = {}
     universe: dict[str, Any] = {}
     entry: dict[str, Any] = {}
+    capital: float | None = None  # 模擬帳戶：此組合自己的模擬資金
 
 
 def bot_out(b: Bot, s: Session) -> dict:
@@ -57,7 +56,7 @@ def bot_out(b: Bot, s: Session) -> dict:
                                                                    else "strategy")
     d["ai_trader"] = (
         {k: (strat.params or {}).get(k) for k in ("instructions", "reference_strategy_id", "min_confidence",
-                                                  "persona_id", "reviewer_ids", "veto_rule")}
+                                                  "persona_id")}
         if strat and strat.kind == "ai" else None
     )
     d["running"] = bool(runner and runner.running)
@@ -117,8 +116,6 @@ def _validate(body: BotIn) -> None:
         raise HTTPException(400, str(e)) from e
     if not body.symbols and (body.universe or {}).get("mode") != "rules":
         raise HTTPException(400, "至少需要一個交易對（或改用規則自動挑選）")
-    if body.ai_trader and body.ai_trader.veto_rule not in ("any", "majority"):
-        raise HTTPException(400, "否決規則只能是 any 或 majority")
 
 
 @router.get("/bots")

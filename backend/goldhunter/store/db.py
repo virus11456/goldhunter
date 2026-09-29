@@ -75,6 +75,8 @@ class Bot(SQLModel, table=True):
     # 標的範圍：{"mode": "list"} 用 symbols；{"mode": "rules", "top_n": 10, "exclude_meme": true,
     #   "exclude": ["DOGE"], "include_only": []} 依 24 小時成交量自動挑選 USDT 永續
     universe: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # 模擬帳戶時此 Bot（組合）自己的模擬資金；空白＝用帳戶設定
+    capital: float | None = None
     # 進場方式：{"mode": "market"} 訊號出現就市價進場；{"mode": "smart"} 依進場分析掛單等待更好的點位
     entry: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # 此 Bot 專屬的策略參數覆寫（AI 參數微調套用在這裡，不影響其他 Bot）

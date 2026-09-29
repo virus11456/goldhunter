@@ -10,7 +10,6 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlmodel import Session
 
 from goldhunter.api import (
     analysis_routes,
@@ -25,7 +24,6 @@ from goldhunter.api.deps import require_token
 from goldhunter.config import get_settings
 from goldhunter.core.secrets import api_token
 from goldhunter.engine.manager import manager
-from goldhunter.personas.lifecycle import seed_builtin
 from goldhunter.store.db import get_engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -36,8 +34,6 @@ log = logging.getLogger("goldhunter")
 async def lifespan(app: FastAPI):
     settings = get_settings()
     get_engine()
-    with Session(get_engine()) as s:
-        seed_builtin(s)  # 內建投資大師
     token_file = settings.data_dir / "api_token"
     api_token()
     if not settings.api_token:
