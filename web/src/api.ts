@@ -731,6 +731,7 @@ export interface EntryResult {
   signal: EntrySignal | null
   analysis: EntryAnalysis | null
   hypothetical?: boolean
+  assumed_reason?: string | null // 沒有訊號時依趨勢假設方向的說明
   note?: string
 }
 
@@ -740,6 +741,7 @@ export interface BotEntryItem {
   analysis: EntryAnalysis | null
   pending: { level: number; label: string; bars_left: number; action: string } | null
   hypothetical?: boolean
+  assumed_reason?: string | null // 沒有訊號時依趨勢假設方向的說明
   error?: string
 }
 

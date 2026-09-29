@@ -338,9 +338,9 @@ function EntryNowCard({ strategyId, exchange, symbol, timeframe, usesAi }: { str
               {sig.reasoning && <span className="truncate text-slate-300">{sig.reasoning}</span>}
             </div>
           ) : (
-            res.note && <div className="text-xs text-muted">{res.note}</div>
+            res.note && !res.assumed_reason && <div className="text-xs text-muted">{res.note}</div>
           )}
-          {res.analysis && <EntryAnalysisView a={res.analysis} hypothetical={res.hypothetical} />}
+          {res.analysis && <EntryAnalysisView a={res.analysis} hypothetical={res.hypothetical} assumedReason={res.assumed_reason} />}
         </div>
       )}
     </Card>

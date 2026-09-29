@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
-from goldhunter.analysis.entry import analyze_entry, strategy_signal_indices
+from goldhunter.analysis.entry import analyze_entry, strategy_signal_indices, trend_direction
 from goldhunter.backtest.data import fetch_history
 from goldhunter.backtest.engine import TF_SECONDS
 from goldhunter.core.models import Action, Balance, Instrument
@@ -77,19 +77,19 @@ async def entry_for_strategy(body: EntryIn, s: Session = Depends(get_session)):
                               balance=Balance(currency="USDT", total=10_000, free=10_000),
                               capabilities=Capabilities(supports_short=True, max_leverage=125), max_leverage=3)
         signal = await strategy.run(ctx)
-    direction = body.direction
+    direction, assumed = body.direction, None
     if signal is not None and signal.action in (Action.OPEN_LONG, Action.OPEN_SHORT):
         direction = "long" if signal.action == Action.OPEN_LONG else "short"
     elif not direction:
-        return {"signal": _signal_out(signal), "analysis": None,
-                "note": "目前沒有進場訊號；可指定做多或做空，看假設現在進場的盈虧比"}
+        direction, assumed = trend_direction(closed)  # 沒有訊號：依趨勢假設方向，不讓畫面空白
     sig_idx = await strategy_signal_indices(build_strategy(st.kind, strategy.params, st.code), inst,
                                             body.timeframe, closed, direction)
     is_sig = signal is not None and signal.action in (Action.OPEN_LONG, Action.OPEN_SHORT)
     analysis = analyze_entry(closed, body.timeframe, direction, signal.stop_loss if is_sig else None,
                              signal.take_profit if is_sig else None, sig_idx)
     return {"signal": _signal_out(signal), "analysis": analysis.model_dump(),
-            "hypothetical": not is_sig}
+            "hypothetical": not is_sig, "assumed_reason": assumed,
+            "note": None if is_sig else (assumed or f"目前沒有進場訊號，以下是假設現在{'做多' if direction == 'long' else '做空'}的分析")}
 
 
 @router.get("/bots/{bot_id}/entry-analysis")
@@ -135,6 +135,8 @@ async def entry_for_bot(bot_id: int, direction: str | None = None, s: Session = 
         d = direction
         if sig and sig["action"] in ("open_long", "open_short"):
             d = "long" if sig["action"] == "open_long" else "short"
+        elif not d and len(candles) >= 60:
+            d, item["assumed_reason"] = trend_direction(candles)  # 沒有訊號：依趨勢假設方向
         if d and len(candles) >= 60:
             idx = []
             if runner.strategy is not None and not runner.strategy.uses_ai:

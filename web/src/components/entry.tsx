@@ -32,9 +32,10 @@ export function EntryLine({ a, pending }: { a: EntryAnalysis; pending?: boolean 
 }
 
 /** 完整分析：價位摘要 + 候選進場方式表（推薦列高亮）+ 建議文字 */
-export function EntryAnalysisView({ a, hypothetical }: { a: EntryAnalysis; hypothetical?: boolean }) {
+export function EntryAnalysisView({ a, hypothetical, assumedReason }: { a: EntryAnalysis; hypothetical?: boolean; assumedReason?: string | null }) {
   return (
     <div className="space-y-3">
+      {assumedReason && <div className="text-xs text-muted">{assumedReason}</div>}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
         <DirectionBadge d={a.direction} />
         {hypothetical && <span className="badge badge-gray">假設現在進場</span>}

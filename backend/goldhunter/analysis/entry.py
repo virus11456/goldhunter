@@ -104,6 +104,17 @@ def _simulate(candles: list[Candle], atr: list[float | None], signal_idx: list[i
     return filled / usable, (wins / decided if decided >= 5 else None), decided
 
 
+def trend_direction(candles: list[Candle]) -> tuple[str, str]:
+    """沒有訊號時的假設方向：收盤價在 EMA50 之上假設做多、之下假設做空"""
+    close = [c.close for c in candles]
+    e = ta.ema(close, 50)[-1] if len(close) >= 50 else None
+    if e is None:
+        return "long", "K 線不足，預設假設做多"
+    if close[-1] >= e:
+        return "long", f"目前沒有訊號，價格在 EMA50（{e:.6g}）之上，依趨勢假設做多"
+    return "short", f"目前沒有訊號，價格在 EMA50（{e:.6g}）之下，依趨勢假設做空"
+
+
 def analyze_entry(candles: list[Candle], timeframe: str, direction: str, stop: float | None = None,
                   target: float | None = None, signal_idx: list[int] | None = None) -> EntryAnalysis:
     """candles：到最新一根已收盤 K 棒為止；signal_idx：歷史上同方向訊號出現的 K 棒索引（沒有就用全部 K 棒）"""

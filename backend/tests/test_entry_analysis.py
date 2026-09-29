@@ -62,3 +62,12 @@ async def test_signal_indices_from_strategy(candles):
         assert f[i] > sl[i] and f[i - 1] <= sl[i - 1]
     a = analyze_entry(candles[:-1], "1h", "long", signal_idx=idx)
     assert "訊號" in a.sample_basis or "K 棒" in a.sample_basis
+
+
+def test_trend_direction():
+    from goldhunter.analysis.entry import trend_direction
+
+    up = make_candles(200, amp=0.1)  # 緩步上漲
+    assert trend_direction(up)[0] == "long"
+    down = [c.model_copy(update={"close": 1000 - c.close}) for c in up]
+    assert trend_direction(down)[0] == "short" and "EMA50" in trend_direction(down)[1]

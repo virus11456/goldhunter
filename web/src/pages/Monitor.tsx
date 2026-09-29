@@ -307,9 +307,9 @@ function EntryPanel({ bot }: { bot: Bot }) {
                 {it.error ? (
                   <div className="text-xs text-red-300">{it.error}</div>
                 ) : it.analysis ? (
-                  <EntryAnalysisView a={it.analysis} hypothetical={it.hypothetical} />
+                  <EntryAnalysisView a={it.analysis} hypothetical={it.hypothetical} assumedReason={it.assumed_reason} />
                 ) : (
-                  <div className="text-xs text-muted">選「做多」或「做空」可看假設現在進場的盈虧比。</div>
+                  <div className="text-xs text-muted">K 線不足，暫時無法分析。</div>
                 )}
               </div>
             ))

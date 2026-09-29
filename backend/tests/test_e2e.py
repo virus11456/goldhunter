@@ -458,12 +458,20 @@ def test_entry_analysis_endpoints(client, monkeypatch):
     r = client.post("/api/analysis/entry", headers=H, json={"strategy_id": st["id"], "direction": "long"}).json()
     assert r["analysis"]["candidates"][0]["key"] == "market"
     assert r["analysis"]["recommendation"]
+    r2 = client.post("/api/analysis/entry", headers=H, json={"strategy_id": st["id"]}).json()
+    assert r2["analysis"] is not None and (r2["note"] or not r2["hypothetical"])  # 有訊號用訊號，沒有就依趨勢假設
 
     bot = _setup_bot(client, {"review": False, "manage": False, "event_blackout_min": 0})
     client.post(f"/api/bots/{bot['id']}/start", headers=H)
     _tick(client, bot["id"], 2)
     e = client.get(f"/api/bots/{bot['id']}/entry-analysis?direction=short", headers=H).json()
     assert e["entry"]["mode"] == "market" and e["items"][0]["analysis"]["direction"] in ("long", "short")
+    # 沒有訊號也沒指定方向：依趨勢假設方向，不會是空的
+    e2 = client.get(f"/api/bots/{bot['id']}/entry-analysis", headers=H).json()
+    it = e2["items"][0]
+    assert it["analysis"] is not None
+    if it["signal"] is None or it["signal"]["action"] not in ("open_long", "open_short"):
+        assert it["hypothetical"] and "EMA50" in it["assumed_reason"]
     client.post(f"/api/bots/{bot['id']}/stop", headers=H)
 
 
