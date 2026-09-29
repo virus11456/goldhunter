@@ -387,8 +387,7 @@ export function AiBadge({ mode = 'review', persona }: { mode?: 'trader' | 'revie
   return (
     <span className="badge border-gold/40 bg-gold/10 text-gold" title={persona ? `交易大腦：${persona}` : undefined}>
       <Icons.sparkle className="h-3 w-3" />
-      {mode === 'trader' ? 'AI 交易員' : 'AI 審核'}
-      {mode === 'trader' && persona && <span>・{persona.split(/[·・]/).pop()?.trim() || persona}</span>}
+      {mode === 'trader' ? `AI 交易員${persona ? `・${persona.split(/[·・]/).pop()?.trim() || persona}` : ''}` : 'AI 審核'}
     </span>
   )
 }

@@ -7,14 +7,16 @@ import { MetaProvider } from './lib/meta'
 import Backtest from './pages/Backtest'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
+import Masters from './pages/Masters'
 import Monitor from './pages/Monitor'
 import Settings from './pages/Settings'
 
 const NAV = [
   { to: '/', label: '總覽', end: true },
-  { to: '/settings', label: '設定' },
-  { to: '/backtest', label: '回測' },
   { to: '/monitor', label: '監控' },
+  { to: '/masters', label: '大師組合' },
+  { to: '/backtest', label: '回測' },
+  { to: '/settings', label: '設定' },
 ]
 
 function Shell({ children }: { children: ReactNode }) {
@@ -105,6 +107,7 @@ export default function App() {
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/backtest" element={<Backtest />} />
                 <Route path="/monitor" element={<Monitor />} />
+                <Route path="/masters" element={<Masters />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </MetaProvider>

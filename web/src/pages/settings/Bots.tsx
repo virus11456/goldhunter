@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, hasFidelity, type AITraderIn, type Bot, type BotIn, type CopilotConfig, type Params, type Persona, type RiskConfig, type Strategy, type UniverseRules } from '../../api'
-import { CoinChipsInput, CopilotForm, NumInput, ParamsForm, RiskForm, SymbolsInput, baseOf, copilotNeedsAi } from '../../components/forms'
+import { api, type AITraderIn, type Bot, type BotIn, type CopilotConfig, type EntryConfig, type Params, type Persona, type RiskConfig, type Strategy, type UniverseRules } from '../../api'
+import { CoinChipsInput, CopilotForm, Segmented, NumInput, ParamsForm, RiskForm, SymbolsInput, baseOf, copilotNeedsAi } from '../../components/forms'
 import {
   BotAiBadge,
   BotStatusBadge,
@@ -22,7 +22,7 @@ import {
 } from '../../components/ui'
 import { kindLabel } from '../../lib/format'
 import { useMeta } from '../../lib/meta'
-import { ROLE_LABEL, botPersonaName, personaScoreText, universeLabel } from '../../lib/persona'
+import { botPersonaName, personaScoreText, universeLabel } from '../../lib/persona'
 
 type Mode = 'ai_trader' | 'strategy'
 
@@ -31,23 +31,12 @@ const AI_TRADER_DEFAULT: AITraderIn = {
   reference_strategy_id: null,
   min_confidence: 0.6,
   persona_id: null,
-  reviewer_ids: [],
-  veto_rule: 'any',
 }
+
+const ENTRY_DEFAULT: EntryConfig = { mode: 'market', max_wait_bars: null, skip_negative_ev: false }
 
 const UNIVERSE_DEFAULT: Required<UniverseRules> = { mode: 'list', top_n: 10, exclude_meme: true, exclude: [], include_only: [], refresh_hours: 6 }
 
-function Segmented<T extends string>({ value, options, onChange }: { value: T; options: readonly (readonly [T, string])[]; onChange: (v: T) => void }) {
-  return (
-    <div className="inline-flex rounded-lg border border-line p-0.5">
-      {options.map(([v, l]) => (
-        <button key={v} type="button" className={`rounded-md px-3 py-1 text-sm transition-colors ${value === v ? 'bg-gold/15 text-gold' : 'text-muted hover:text-slate-200'}`} onClick={() => onChange(v)}>
-          {l}
-        </button>
-      ))}
-    </div>
-  )
-}
 
 const isTraderStrategy = (s: Strategy) => s.kind === 'ai' && s.name.startsWith('AI 交易員｜')
 
@@ -61,6 +50,7 @@ interface Form {
   ai_model_id: number | ''
   symbols: string[]
   universe: Required<UniverseRules>
+  entry: EntryConfig
   timeframe: string
   interval_sec: number
   risk: Partial<RiskConfig>
@@ -188,6 +178,7 @@ export default function Bots() {
       ai_model_id: models?.[0]?.id ?? '',
       symbols: ['crypto:BTC/USDT:perp'],
       universe: { ...UNIVERSE_DEFAULT },
+      entry: { ...ENTRY_DEFAULT },
       timeframe: '15m',
       interval_sec: 60,
       risk: {},
@@ -204,8 +195,6 @@ export default function Bots() {
         ...(b.ai_trader ?? {}),
         instructions: b.ai_trader?.instructions || AI_TRADER_DEFAULT.instructions,
         persona_id: b.ai_trader?.persona_id ?? null,
-        reviewer_ids: [...(b.ai_trader?.reviewer_ids ?? [])],
-        veto_rule: b.ai_trader?.veto_rule || 'any',
       },
       name: b.name,
       account_id: b.account_id,
@@ -213,6 +202,7 @@ export default function Bots() {
       ai_model_id: b.ai_model_id ?? '',
       symbols: [...b.symbols],
       universe: { ...UNIVERSE_DEFAULT, ...(b.universe ?? {}), mode: (b.universe as UniverseRules | undefined)?.mode === 'rules' ? 'rules' : 'list' },
+      entry: { ...ENTRY_DEFAULT, ...(b.entry ?? {}) },
       timeframe: b.timeframe,
       interval_sec: b.interval_sec,
       risk: diffFrom(b.risk as Record<string, unknown>, meta.risk_defaults as unknown as Record<string, unknown>) as Partial<RiskConfig>,
@@ -235,12 +225,11 @@ export default function Bots() {
       name: form.name.trim(),
       account_id: Number(form.account_id),
       strategy_id: isTrader ? null : Number(form.strategy_id),
-      ai_trader: isTrader
-        ? { ...form.ai_trader, reviewer_ids: (form.ai_trader.reviewer_ids ?? []).filter((x) => x !== form.ai_trader.persona_id) }
-        : null,
+      ai_trader: isTrader ? form.ai_trader : null,
       ai_model_id: form.ai_model_id ? Number(form.ai_model_id) : null,
       symbols: byRules ? [] : form.symbols,
       universe: byRules ? { ...form.universe, mode: 'rules' } : { mode: 'list' },
+      entry: form.entry,
       timeframe: form.timeframe,
       interval_sec: form.interval_sec,
       risk: form.risk,
@@ -283,12 +272,9 @@ export default function Bots() {
   const selAccount = accounts?.find((a) => a.id === form?.account_id)
   const paperOnlyOnLive = !isTrader && strat?.status === 'paper_only' && selAccount?.paper === false
   const brain = personas?.find((p) => p.id === form?.ai_trader.persona_id)
-  const reviewerIds = (form?.ai_trader.reviewer_ids ?? []).filter((x) => x !== form?.ai_trader.persona_id)
-  const notLivePersonas: Persona[] =
-    isTrader && selAccount?.paper === false
-      ? (personas ?? []).filter((p) => (p.id === brain?.id || reviewerIds.includes(p.id)) && p.status !== 'active')
-      : []
+  const notLivePersonas: Persona[] = isTrader && selAccount?.paper === false && brain && brain.status !== 'active' ? [brain] : []
   const setTrader = (patch: Partial<AITraderIn>) => form && setForm({ ...form, ai_trader: { ...form.ai_trader, ...patch } })
+  const setEntry = (patch: Partial<EntryConfig>) => form && setForm({ ...form, entry: { ...form.entry, ...patch } })
   const setUniverse = (patch: Partial<UniverseRules>) => form && setForm({ ...form, universe: { ...form.universe, ...patch } })
 
   return (
@@ -506,6 +492,31 @@ export default function Bots() {
                   </div>
                 )}
               </div>
+              <div className="md:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="label mb-0">進場方式</span>
+                  <Segmented
+                    value={form.entry.mode === 'smart' ? 'smart' : 'market'}
+                    options={[['market', '市價進場'], ['smart', '智慧掛單']] as const}
+                    onChange={(mode) => setEntry({ mode })}
+                  />
+                </div>
+                {form.entry.mode === 'smart' ? (
+                  <div className="mt-2 flex flex-wrap items-end gap-x-6 gap-y-3 rounded-xl border border-line bg-[#101318] p-3">
+                    <Field label="最多等幾根 K 棒">
+                      <div className="w-28">
+                        <NumInput value={form.entry.max_wait_bars} step={1} placeholder="自動" onChange={(v) => setEntry({ max_wait_bars: v === null ? null : Math.max(1, Math.min(200, Math.round(v))) })} />
+                      </div>
+                    </Field>
+                    <div className="pb-2">
+                      <Toggle checked={form.entry.skip_negative_ev} onChange={(v) => setEntry({ skip_negative_ev: v })} label="期望值都為負時放棄進場" />
+                    </div>
+                    <div className="w-full text-xs text-muted">訊號出現時先做進場分析，在盈虧比更好的價位掛單等待；等不到就取消。留空＝依 K 線週期自動。</div>
+                  </div>
+                ) : (
+                  <div className="hint">訊號出現就以市價進場。</div>
+                )}
+              </div>
             </section>
 
             {/* AI 交易員 */}
@@ -527,72 +538,28 @@ export default function Bots() {
                     placeholder="例如：順勢交易、不逆勢抄底；重大數據前不開倉；最多 3 倍槓桿"
                   />
                 </Field>
-                <div className="space-y-3 rounded-xl border border-line bg-black/20 p-3">
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <Field label="交易大腦" hint={<>用哪位投資大師的思維做判斷；到「設定 → 投資大師」管理</>}>
-                      <select
-                        className="input"
-                        value={form.ai_trader.persona_id ?? ''}
-                        onChange={(e) => {
-                          const id = e.target.value ? Number(e.target.value) : null
-                          setTrader({ persona_id: id, reviewer_ids: (form.ai_trader.reviewer_ids ?? []).filter((x) => x !== id) })
-                        }}
-                      >
-                        <option value="">不使用（一般 AI 交易員）</option>
-                        {personas?.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}（{ROLE_LABEL[p.role] ?? p.role}）· {personaScoreText(p)}
-                          </option>
-                        ))}
-                      </select>
-                      {brain && !brain.markets.includes('crypto') && (
-                        <div className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-gold/40 bg-gold/10 px-2.5 py-1.5 text-xs text-amber-100">
-                          <Icons.alert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gold" />
-                          這位大師不適合加密貨幣合約，建議改當審查委員
-                        </div>
-                      )}
-                    </Field>
-                    {reviewerIds.length > 0 && (
-                      <Field label="否決規則">
-                        <Segmented
-                          value={form.ai_trader.veto_rule === 'majority' ? 'majority' : 'any'}
-                          options={[['any', '任一否決'], ['majority', '多數決']] as const}
-                          onChange={(veto_rule) => setTrader({ veto_rule })}
-                        />
-                      </Field>
-                    )}
-                  </div>
-                  <Field label="審查委員（可多選）" hint="交易大腦提出開倉時，由審查委員逐一表決，可以否決。">
-                    <div className="flex flex-wrap gap-1.5">
-                      {(personas ?? [])
-                        .filter((p) => p.id !== form.ai_trader.persona_id)
-                        .map((p) => {
-                          const on = reviewerIds.includes(p.id)
-                          return (
-                            <button
-                              key={p.id}
-                              type="button"
-                              aria-pressed={on}
-                              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-sm transition-colors ${on ? 'border-gold/60 bg-gold/15 text-gold' : 'border-line text-muted hover:text-slate-200'}`}
-                              onClick={() => setTrader({ reviewer_ids: on ? reviewerIds.filter((x) => x !== p.id) : [...reviewerIds, p.id] })}
-                              title={personaScoreText(p)}
-                            >
-                              {on && <Icons.check className="h-3.5 w-3.5" />}
-                              {p.name}
-                              {!hasFidelity(p.fidelity) && <span className="text-[10px] text-slate-500">未評分</span>}
-                            </button>
-                          )
-                        })}
-                      {!personas?.length && <span className="text-xs text-muted">尚無投資大師</span>}
-                    </div>
-                  </Field>
-                  {notLivePersonas.map((p) => (
-                    <div key={p.id} className="flex items-start gap-1.5 rounded-lg border border-gold/40 bg-gold/10 px-2.5 py-1.5 text-xs text-amber-100">
+                <Field label="交易大腦" hint="用哪位投資大師的思維做判斷；到「設定 → 投資大師」上傳">
+                  <select className="input" value={form.ai_trader.persona_id ?? ''} onChange={(e) => setTrader({ persona_id: e.target.value ? Number(e.target.value) : null })}>
+                    <option value="">不使用（一般 AI 交易員）</option>
+                    {personas?.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} · {personaScoreText(p)}
+                      </option>
+                    ))}
+                  </select>
+                  {brain && !brain.markets.includes('crypto') && (
+                    <div className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-gold/40 bg-gold/10 px-2.5 py-1.5 text-xs text-amber-100">
                       <Icons.alert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gold" />
-                      「{p.name}」尚未開放實盤（未評分或模擬期中），只能用在模擬帳戶
+                      這位大師不適合加密貨幣合約
+                    </div>
+                  )}
+                  {notLivePersonas.map((p) => (
+                    <div key={p.id} className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-gold/40 bg-gold/10 px-2.5 py-1.5 text-xs text-amber-100">
+                      <Icons.alert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gold" />
+                      「{p.name}」尚未開放實盤（未通過評分或模擬期中），只能用在模擬帳戶
                     </div>
                   ))}
-                </div>
+                </Field>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <Field label="參考策略（選填）" hint="AI 會把這個策略的訊號當成參考意見，不會盲從">
                     <select

@@ -146,6 +146,15 @@ export interface RiskConfig {
   min_confidence: number
   max_orders_per_hour: number
   allow_pyramiding: boolean
+  max_positions?: number // 最多同時持有幾個標的；0＝不限
+  long_only?: boolean // 只做多
+}
+
+/** 進場方式（backend analysis/config.py EntryConfig） */
+export interface EntryConfig {
+  mode: 'market' | 'smart' | string
+  max_wait_bars: number | null
+  skip_negative_ev: boolean
 }
 
 export interface CopilotConfig {
@@ -355,19 +364,17 @@ export interface Bot {
   mode: BotMode
   ai_trader: AITraderIn | null
   universe?: UniverseRules | Record<string, never> | null
+  entry?: EntryConfig
+  capital?: number | null // 模擬帳戶：此組合自己的模擬資金
 }
 
 export type BotMode = 'ai_trader' | 'strategy' | 'tradingview'
-
-export type VetoRule = 'any' | 'majority'
 
 export interface AITraderIn {
   instructions: string
   reference_strategy_id: number | null
   min_confidence: number
   persona_id?: number | null // 交易大腦（投資大師）
-  reviewer_ids?: number[] // 審查委員
-  veto_rule?: VetoRule | string
 }
 
 /** 標的範圍（backend engine/universe.py UniverseRules）；空物件＝手動清單 */
@@ -393,6 +400,8 @@ export interface BotIn {
   copilot: Partial<CopilotConfig>
   params_override: Params
   universe?: UniverseRules | Record<string, never>
+  entry?: Partial<EntryConfig>
+  capital?: number | null
 }
 
 export interface Dashboard {
@@ -454,22 +463,12 @@ export interface DecisionPayload {
   reasoning?: string
   source?: string
   meta?: DecisionMeta | null
-}
-
-export interface CommitteeOpinion {
-  name: string
-  verdict: 'approve' | 'veto' | string
-  reasoning: string
+  entry_analysis?: EntryAnalysis // 開倉時的進場分析（engine 寫入）
+  pending?: boolean // 智慧進場：掛單等待中
 }
 
 export interface DecisionMeta {
-  persona?: string
-  committee?: {
-    rule: VetoRule | string
-    vetoed: boolean
-    proposed?: Action | string
-    opinions: CommitteeOpinion[]
-  }
+  persona?: string // 交易大腦（投資大師）名字
 }
 
 export interface DecisionLog {
@@ -590,7 +589,7 @@ export interface IntelSnapshot {
 
 // ------------------------------ 投資大師（Persona） ------------------------------
 export type PersonaRole = 'trader' | 'reviewer' | 'both'
-export type PersonaSource = 'builtin' | 'upload' | 'distill'
+export type PersonaSource = 'nuwa' | 'upload' | string
 export type PersonaStatus = 'draft' | 'paper_only' | 'active'
 export type PersonaMarket = 'crypto' | 'us' | 'tw'
 
@@ -608,51 +607,23 @@ export interface FidelityQuestion {
   answer: string
 }
 
+/** 由上傳的 FIDELITY.md 解析（backend personas/nuwa.py FidelityInfo） */
 export interface FidelityReport {
   score: number
   grade: 'A' | 'B' | 'C' | 'D' | string
-  passed: boolean
   dimensions: FidelityDimension[]
-  questions: FidelityQuestion[]
+  tested_at?: string | null
   summary: string
-}
-
-export interface CostEstimate {
-  depth: 'quick' | 'standard' | string
-  depth_label: string
-  input_tokens: number
-  output_tokens: number
-  web_searches: number
-  usd: number | null
-  note: string
-  model?: string
-}
-
-export interface OnchainSummary {
-  fills: number
-  period_days?: number
-  top_coins?: [string, number][]
-  open_trades?: number
-  long_ratio_pct?: number | null
-  trades_per_day?: number
-  win_rate_pct?: number | null
-  avg_win?: number | null
-  avg_loss?: number | null
-  total_closed_pnl?: number
-  median_notional_usd?: number
-  avg_hold_hours?: number | null
-  most_active_utc_hours?: number[]
+  passed?: boolean // 舊資料
+  questions?: FidelityQuestion[] // 舊資料
 }
 
 export interface PersonaMeta {
   files?: string[]
   truncated?: boolean
   filename?: string
-  depth?: string
-  model?: string
-  onchain?: OnchainSummary | null
-  hyperliquid_address?: string | null
-  estimate?: CostEstimate
+  kept_sections?: string[]
+  dropped_sections?: string[]
   [k: string]: unknown
 }
 
@@ -686,30 +657,143 @@ export interface PersonaDetail extends Persona {
 export interface PersonaUploadIn {
   filename: string
   content_base64: string
-  role: PersonaRole | string
-  markets: string[]
+  fidelity_filename?: string | null // 單獨上傳 SKILL.md 時，可另外附 FIDELITY.md
+  fidelity_base64?: string | null
 }
 
-export interface PersonaDistillIn {
-  name: string
-  ai_model_id: number
-  depth: 'quick' | 'standard'
-  corpus?: string | null
-  hyperliquid_address?: string | null
-  role: PersonaRole | string
-  markets: string[]
-}
-
+/** 只能改名稱與簡介；思維內容需在女媧重新蒸餾後重新上傳 */
 export interface PersonaUpdateIn {
   name: string
-  role: PersonaRole | string
-  markets: string[]
   summary: string
-  profile: string
 }
 
 export const hasFidelity = (f: Persona['fidelity'] | null | undefined): f is FidelityReport =>
   !!f && typeof (f as FidelityReport).score === 'number'
+
+// ------------------------------ 進場分析 ------------------------------
+export interface EntryCandidate {
+  key: string
+  label: string
+  price: number
+  rr: number // 盈虧比
+  fill_prob: number // 等得到的機率（市價＝1）
+  win_prob: number | null // 成交後先碰到目標的機率
+  ev_r: number | null // 成交後每筆期望值（R）
+  ev_per_signal: number | null // 考慮等不到：每次訊號的期望值（R）
+  samples: number
+}
+
+export interface EntryAnalysis {
+  direction: 'long' | 'short' | string
+  price: number
+  atr: number
+  stop: number
+  target: number
+  stop_source: string
+  target_source: string
+  candidates: EntryCandidate[]
+  recommended: string // 候選 key；skip＝建議不要進場
+  recommendation: string
+  wait_bars: number
+  signal_samples: number
+  sample_basis: string
+  high_frequency: boolean
+}
+
+export interface EntrySignal {
+  action: Action | string
+  stop_loss?: number | null
+  take_profit?: number | null
+  size_pct?: number
+  reasoning?: string
+  confidence?: number
+  from_log?: boolean
+}
+
+export interface EntryIn {
+  strategy_id: number
+  exchange_id: string
+  symbol: string
+  timeframe: string
+  params?: Params | null
+  direction?: 'long' | 'short' | null
+  ai_model_id?: number | null
+}
+
+export interface EntryResult {
+  signal: EntrySignal | null
+  analysis: EntryAnalysis | null
+  hypothetical?: boolean
+  note?: string
+}
+
+export interface BotEntryItem {
+  instrument: string
+  signal: EntrySignal | null
+  analysis: EntryAnalysis | null
+  pending: { level: number; label: string; bars_left: number; action: string } | null
+  hypothetical?: boolean
+  error?: string
+}
+
+export interface BotEntryAnalysis {
+  entry: EntryConfig
+  items: BotEntryItem[]
+}
+
+// ------------------------------ 大師組合 ------------------------------
+export interface PortfolioPlan {
+  suitable: boolean
+  style_summary: string
+  reason: string
+  timeframe: '15m' | '1h' | '4h' | '1d' | string
+  holding_period: string
+  universe: { mode: 'rules' | 'list' | string; top_n: number; exclude_meme: boolean; include_only: string[]; symbols: string[] }
+  max_positions: number
+  position_pct: number
+  max_leverage: number
+  allow_short: boolean
+  entry_mode: 'market' | 'smart' | string
+  instructions: string
+}
+
+export interface PortfolioIn {
+  ai_model_id: number
+  account_id: number
+  plan: PortfolioPlan
+  capital?: number | null
+  name?: string | null
+  start?: boolean
+}
+
+export interface PortfolioResult {
+  bot_id: number
+  started: boolean
+  error: string | null
+}
+
+export interface MasterPortfolio {
+  bot_id: number
+  name: string
+  running: boolean
+  status: string
+  persona: { id: number; name: string; status: string; fidelity: number | null } | null
+  timeframe: string
+  universe: UniverseRules | Record<string, never>
+  symbols: string[]
+  risk: { max_leverage?: number; max_positions?: number; max_position_pct?: number; long_only?: boolean }
+  plan: PortfolioPlan | null
+  start_equity: number | null
+  equity: number | null
+  return_pct: number | null
+  max_drawdown_pct: number
+  trades: number
+  closed_trades: number
+  win_rate_pct: number | null
+  realized_pnl: number
+  open_positions: number | null
+  curve: { ts: ISODate; pct: number }[]
+}
 
 export interface BacktestIn {
   strategy_id: number
@@ -851,12 +935,17 @@ export const api = {
   listPersonas: () => get<Persona[]>('/personas'),
   getPersona: (id: number) => get<PersonaDetail>(`/personas/${id}`),
   uploadPersona: (b: PersonaUploadIn) => post<PersonaDetail>('/personas/upload', b),
-  estimatePersona: (b: PersonaDistillIn) => post<CostEstimate>('/personas/estimate', b),
-  distillPersona: (b: PersonaDistillIn) => post<PersonaDetail>('/personas/distill', b),
-  personaFidelity: (id: number, ai_model_id: number) => post<PersonaDetail>(`/personas/${id}/fidelity`, { ai_model_id }),
   updatePersona: (id: number, b: PersonaUpdateIn) => put<PersonaDetail>(`/personas/${id}`, b),
   promotePersona: (id: number) => post<Persona>(`/personas/${id}/promote`),
   deletePersona: (id: number) => del<{ ok: boolean }>(`/personas/${id}`),
+  portfolioPlan: (id: number, ai_model_id: number) => post<PortfolioPlan>(`/personas/${id}/portfolio-plan`, { ai_model_id }),
+  createPortfolio: (id: number, b: PortfolioIn) => post<PortfolioResult>(`/personas/${id}/portfolio`, b),
+  masters: () => get<MasterPortfolio[]>('/masters'),
+
+  // entry analysis（進場分析）
+  entryAnalysis: (b: EntryIn) => post<EntryResult>('/analysis/entry', b),
+  botEntryAnalysis: (id: number, direction?: 'long' | 'short' | null) =>
+    get<BotEntryAnalysis>(`/bots/${id}/entry-analysis${direction ? `?direction=${direction}` : ''}`),
 
   // records
   trades: (botId?: number | null, limit = 200) =>

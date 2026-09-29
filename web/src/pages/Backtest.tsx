@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, type BacktestIn, type BacktestRun, type Params, type RiskConfig } from '../api'
+import { api, errMsg, type BacktestIn, type BacktestRun, type EntryResult, type Params, type RiskConfig } from '../api'
 import { CandleChart, EquityChart } from '../components/charts'
 import { MetricsPanel } from '../components/metrics'
+import { DirectionBadge, EntryAnalysisView } from '../components/entry'
 import { NumInput, ParamsForm, RiskForm, SymbolPicker, baseOf } from '../components/forms'
 import { Card, Change, Collapsible, Empty, Field, Icons, SideBadge, Skeleton, Spinner, useAction, useConfirm, useLoader, useToast } from '../components/ui'
 import { fmtNum, fmtPrice, fmtQty, fmtSigned, fmtTime, kindLabel, pnlClass } from '../lib/format'
@@ -263,7 +264,8 @@ export default function Backtest() {
           </Card>
         </div>
 
-        <div className="min-w-0">
+        <div className="min-w-0 space-y-5">
+          {strat && <EntryNowCard strategyId={strat.id} exchange={exchange} symbol={symbol} timeframe={timeframe} usesAi={usesAi} />}
           {busy === 'run' ? (
             <div className="card flex min-h-[420px] flex-col items-center justify-center gap-3 text-muted">
               <Spinner className="h-8 w-8 text-gold" />
@@ -280,6 +282,68 @@ export default function Backtest() {
         </div>
       </div>
     </div>
+  )
+}
+
+function EntryNowCard({ strategyId, exchange, symbol, timeframe, usesAi }: { strategyId: number; exchange: string; symbol: string; timeframe: string; usesAi: boolean }) {
+  const [res, setRes] = useState<EntryResult | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    setRes(null)
+    setErr(null)
+  }, [strategyId, exchange, symbol, timeframe])
+  const go = async (direction: 'long' | 'short' | null) => {
+    setBusy(direction ?? 'signal')
+    setErr(null)
+    try {
+      setRes(await api.entryAnalysis({ strategy_id: strategyId, exchange_id: exchange, symbol, timeframe, direction }))
+    } catch (e) {
+      setErr(errMsg(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const sig = res?.signal
+  return (
+    <Card
+      title="現在進場分析"
+      icon={<Icons.bolt />}
+      actions={
+        <>
+          <button className="btn btn-primary btn-sm" onClick={() => go(null)} disabled={!!busy}>
+            {busy === 'signal' ? <Spinner className="h-3.5 w-3.5" /> : <Icons.play className="h-3.5 w-3.5" />} 分析
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => go('long')} disabled={!!busy} title="沒有訊號時，假設現在做多">
+            {busy === 'long' && <Spinner className="h-3.5 w-3.5" />} 假設做多
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => go('short')} disabled={!!busy} title="沒有訊號時，假設現在做空">
+            {busy === 'short' && <Spinner className="h-3.5 w-3.5" />} 假設做空
+          </button>
+        </>
+      }
+    >
+      {err ? (
+        <div className="rounded-lg border border-down/40 bg-down/10 px-3 py-2 text-xs text-red-200">{err}</div>
+      ) : !res ? (
+        <div className="text-xs text-muted">
+          用左側的策略、交易對與週期，看「現在」進場的盈虧比，以及掛單等更好價位的成交機率與期望值。{usesAi && 'AI 策略不會實際呼叫 AI，請用假設做多 / 做空。'}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {sig && (sig.action === 'open_long' || sig.action === 'open_short') ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-muted">策略目前訊號：</span>
+              <DirectionBadge d={sig.action === 'open_long' ? 'long' : 'short'} />
+              {sig.reasoning && <span className="truncate text-slate-300">{sig.reasoning}</span>}
+            </div>
+          ) : (
+            res.note && <div className="text-xs text-muted">{res.note}</div>
+          )}
+          {res.analysis && <EntryAnalysisView a={res.analysis} hypothetical={res.hypothetical} />}
+        </div>
+      )}
+    </Card>
   )
 }
 

@@ -68,6 +68,19 @@ export function SymbolsInput({ value, onChange }: { value: string[]; onChange: (
   )
 }
 
+/** Small segmented control */
+export function Segmented<T extends string>({ value, options, onChange }: { value: T; options: readonly (readonly [T, string])[]; onChange: (v: T) => void }) {
+  return (
+    <div className="inline-flex rounded-lg border border-line p-0.5">
+      {options.map(([v, l]) => (
+        <button key={v} type="button" className={`rounded-md px-3 py-1 text-sm transition-colors ${value === v ? 'bg-gold/15 text-gold' : 'text-muted hover:text-slate-200'}`} onClick={() => onChange(v)}>
+          {l}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** Bare coin chip input (e.g. ["DOGE", "PEPE"]) for universe rules */
 export function CoinChipsInput({ value, onChange, placeholder = '輸入幣種，按 Enter' }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
   const [text, setText] = useState('')
@@ -185,7 +198,9 @@ const RISK_FIELDS: { key: RiskKey; label: string; kind: 'num' | 'bool'; hint?: s
   { key: 'min_confidence', label: '最低信心', kind: 'num', hint: '0 ~ 1', step: 0.05 },
   { key: 'max_orders_per_hour', label: '每小時下單上限', kind: 'num', step: 1 },
   { key: 'require_stop_loss', label: '強制止損', kind: 'bool' },
+  { key: 'max_positions', label: '最多同時持有標的數', kind: 'num', step: 1, hint: '0＝不限' },
   { key: 'allow_pyramiding', label: '允許加碼', kind: 'bool', hint: '同方向已有持倉時仍可再開' },
+  { key: 'long_only', label: '只做多', kind: 'bool', hint: '不開空單' },
 ]
 
 export function RiskForm({ value, defaults, onChange }: { value: Partial<RiskConfig>; defaults: RiskConfig; onChange: (v: Partial<RiskConfig>) => void }) {
@@ -204,7 +219,7 @@ export function RiskForm({ value, defaults, onChange }: { value: Partial<RiskCon
             <NumInput
               value={get(f.key) as number | null}
               step={f.step ?? 'any'}
-              placeholder={defaults[f.key] === null ? '留空' : String(defaults[f.key])}
+              placeholder={defaults[f.key] === null ? '留空' : String(defaults[f.key] ?? 0)}
               onChange={(v) => {
                 if (v === null && !f.nullable) {
                   const { [f.key]: _omit, ...rest } = value

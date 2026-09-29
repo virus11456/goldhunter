@@ -1,7 +1,8 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, type Bot, type DecisionLog, type DecisionPayload, type TuningRun } from '../api'
+import { api, type Bot, type BotEntryAnalysis, type DecisionLog, type DecisionPayload, type TuningRun } from '../api'
 import { EquityChart } from '../components/charts'
+import { DirectionBadge, EntryAnalysisView, EntryLine } from '../components/entry'
 import {
   BotAiBadge,
   BotStatusBadge,
@@ -128,6 +129,8 @@ export default function Monitor() {
         </div>
       )}
 
+      {bot?.running && <EntryPanel key={bot.id} bot={bot} />}
+
       {bots.data && bots.data.length > 0 && <TuningPanel bot={bot} botsById={Object.fromEntries(bots.data.map((b) => [b.id, b]))} />}
 
       {bots.data && bots.data.length > 0 && (
@@ -230,6 +233,90 @@ function BotCard({ b, persona, selected, onSelect, onToggle, busy }: { b: Bot; p
         </button>
       </div>
     </div>
+  )
+}
+
+// ------------------------------ entry analysis ------------------------------
+function EntryPanel({ bot }: { bot: Bot }) {
+  const [open, setOpen] = useState(false)
+  const [dir, setDir] = useState<'long' | 'short' | null>(null)
+  const [data, setData] = useState<BotEntryAnalysis | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const load = async (d: 'long' | 'short' | null) => {
+    setDir(d)
+    setLoading(true)
+    setErr(null)
+    try {
+      setData(await api.botEntryAnalysis(bot.id, d))
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next && !data && !loading) void load(dir)
+  }
+  const smart = data?.entry.mode === 'smart'
+  return (
+    <section className="card">
+      <button type="button" onClick={toggle} className="flex w-full items-center gap-2 px-4 py-3 text-left">
+        <Icons.chevron className={`h-4 w-4 text-muted transition-transform ${open ? 'rotate-90' : ''}`} />
+        <span className="text-sm font-semibold text-slate-100">進場分析</span>
+        <span className="text-xs text-muted">現在進場的盈虧比、等更好價位的機率與期望值</span>
+        {data && <span className={`badge ml-auto ${smart ? 'badge-gold' : 'badge-gray'}`}>{smart ? '智慧掛單' : '市價進場'}</span>}
+      </button>
+      {open && (
+        <div className="anim-fade space-y-4 border-t border-line p-4">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-muted">沒有訊號時假設：</span>
+            {([['long', '做多'], ['short', '做空']] as const).map(([d, l]) => (
+              <button key={d} className={`btn btn-sm ${dir === d ? 'btn-primary' : 'btn-secondary'}`} onClick={() => load(dir === d ? null : d)} disabled={loading}>
+                {l}
+              </button>
+            ))}
+            <button className="btn btn-ghost btn-sm ml-auto" onClick={() => load(dir)} disabled={loading}>
+              {loading ? <Spinner className="h-3.5 w-3.5" /> : <Icons.refresh className="h-3.5 w-3.5" />} 重新分析
+            </button>
+          </div>
+          {err && <div className="rounded-lg border border-down/40 bg-down/10 px-3 py-2 text-xs text-red-200">{err}</div>}
+          {loading && !data ? (
+            <Skeleton rows={3} />
+          ) : (
+            data?.items.map((it) => (
+              <div key={it.instrument} className="space-y-2.5 rounded-xl border border-line bg-[#0f1216] p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono font-semibold text-slate-100">{shortSymbol(it.instrument)}</span>
+                  {it.signal && (it.signal.action === 'open_long' || it.signal.action === 'open_short') ? (
+                    <>
+                      <DirectionBadge d={it.signal.action === 'open_long' ? 'long' : 'short'} />
+                      <span className="text-xs text-muted">{it.signal.from_log ? 'AI 最近一次開倉判斷' : '目前訊號'}</span>
+                    </>
+                  ) : (
+                    <span className="text-xs text-muted">目前沒有進場訊號</span>
+                  )}
+                  {it.pending && (
+                    <span className="badge badge-blue ml-auto">
+                      掛單等待：{it.pending.label} <span className="font-mono">{fmtPrice(it.pending.level)}</span>・剩 {it.pending.bars_left} 根
+                    </span>
+                  )}
+                </div>
+                {it.error ? (
+                  <div className="text-xs text-red-300">{it.error}</div>
+                ) : it.analysis ? (
+                  <EntryAnalysisView a={it.analysis} hypothetical={it.hypothetical} />
+                ) : (
+                  <div className="text-xs text-muted">選「做多」或「做空」可看假設現在進場的盈虧比。</div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -628,33 +715,6 @@ function Compare({ a, b }: { a: DecisionPayload; b: DecisionPayload }) {
   )
 }
 
-const PROPOSED: Record<string, string> = { open_long: '做多', open_short: '做空', close: '平倉', hold: '觀望' }
-
-function CommitteeBox({ c }: { c: NonNullable<NonNullable<DecisionPayload['meta']>['committee']> }) {
-  return (
-    <div className={`rounded-lg border p-3 ${c.vetoed ? 'border-down/30 bg-down/[0.05]' : 'border-up/30 bg-up/[0.05]'}`}>
-      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-semibold text-slate-100">審查委員會</span>
-        <span className={`badge ${c.vetoed ? 'badge-red' : 'badge-green'}`}>{c.vetoed ? '否決' : '通過'}</span>
-        <span className="text-muted">
-          提議：{PROPOSED[String(c.proposed)] ?? c.proposed ?? '—'}・規則：{c.rule === 'majority' ? '多數決' : '任一否決'}
-        </span>
-      </div>
-      <ul className="space-y-2">
-        {c.opinions.map((o, i) => (
-          <li key={i} className="text-sm">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-slate-100">{o.name}</span>
-              <span className={`badge ${o.verdict === 'veto' ? 'badge-red' : 'badge-green'}`}>{o.verdict === 'veto' ? '否決' : '通過'}</span>
-            </div>
-            {o.reasoning && <p className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-slate-300">{o.reasoning}</p>}
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
 function DecisionsTable({ botId, names }: { botId: number | null; names: Record<number, string> }) {
   const [hideHold, setHideHold] = useState(true)
   const { data, loading } = useLoader(() => api.decisions(botId, 100, hideHold), [botId, hideHold], REFRESH)
@@ -662,7 +722,7 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
   const toggle = (
     <label className="flex cursor-pointer items-center gap-2 border-b border-line px-4 py-2 text-xs text-muted">
       <input type="checkbox" className="accent-[#F0B90B]" checked={hideHold} onChange={(e) => setHideHold(e.target.checked)} />
-      隱藏「觀望 / 維持」（AI 沒有動作的判斷，含被委員會否決的）
+      隱藏「觀望 / 維持」（AI 沒有動作的判斷）
     </label>
   )
   if (loading && !data) return <Skeleton className="p-4" />
@@ -700,7 +760,6 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
             const v = cp ? VERDICT[cp.verdict] ?? { label: cp.verdict, cls: 'badge-gray' } : null
             const isOpen = !!open[d.id]
             const meta = d.decision?.meta
-            const cm = meta?.committee
             const summary = cp?.reasoning || d.decision?.reasoning || d.reasons[0] || ''
             return (
               <Fragment key={d.id}>
@@ -712,10 +771,11 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                   {!botId && <td className="whitespace-nowrap text-xs text-gold/90">{names[d.bot_id] ?? `#${d.bot_id}`}</td>}
                   <td className="font-mono font-semibold text-slate-100">{shortSymbol(d.instrument)}</td>
                   <td>
-                    <div className="flex flex-wrap gap-1">
+                    {meta?.persona ? (
+                      <span className="badge badge-gold" title={`交易大腦：${meta.persona}`}>AI 交易員・{shortPersonaName(meta.persona)}</span>
+                    ) : (
                       <SourceChip source={d.source} />
-                      {meta?.persona && <span className="badge badge-gold" title={`交易大腦：${meta.persona}`}>AI 交易員・{shortPersonaName(meta.persona)}</span>}
-                    </div>
+                    )}
                   </td>
                   <td className={`whitespace-nowrap font-medium ${act.cls}`}>{act.text}</td>
                   <td className="whitespace-nowrap">
@@ -727,7 +787,6 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                       </span>
                     )}
                     {v && <span className={`badge ${v.cls}`}>{v.label}</span>}
-                    {cm && <span className={`badge ${cm.vetoed ? 'badge-red' : 'badge-green'}`}>{cm.vetoed ? '委員會否決' : '委員會通過'}</span>}
                   </td>
                   <td className="r whitespace-nowrap font-mono text-xs">
                     {d.decision?.size_pct ? `${fmtNum(d.decision.size_pct, 1)}%` : '—'}
@@ -736,7 +795,11 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                   <td className="r whitespace-nowrap font-mono text-xs"><SlTp d={d.decision ?? {}} /></td>
                   <td className="max-w-[340px]">
                     <div className="truncate text-xs text-slate-300" title={summary}>{summary || '—'}</div>
-                    {d.reasons.length > 0 && <div className="truncate text-[11px] text-muted">{d.reasons.join('；')}</div>}
+                    {d.decision?.entry_analysis ? (
+                      <EntryLine a={d.decision.entry_analysis} pending={d.decision.pending} />
+                    ) : (
+                      d.reasons.length > 0 && <div className="truncate text-[11px] text-muted">{d.reasons.join('；')}</div>
+                    )}
                   </td>
                 </tr>
                 {isOpen && (
@@ -763,7 +826,6 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                               )}
                             </div>
                           )}
-                          {cm && <CommitteeBox c={cm} />}
                           {d.reasons.length > 0 && (
                             <div>
                               <div className="label">風控 / 執行說明</div>
@@ -779,6 +841,12 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                           </div>
                         </div>
                         <div className="space-y-3">
+                          {d.decision?.entry_analysis && (
+                            <div>
+                              <div className="label">進場分析</div>
+                              <EntryAnalysisView a={d.decision.entry_analysis} />
+                            </div>
+                          )}
                           {cp?.original && (
                             <div>
                               <div className="label">原始訊號 vs AI 調整</div>

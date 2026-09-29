@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, hasFidelity, type Bot, type Persona, type UniverseRules } from '../api'
 import { fmtNum } from './format'
 
-export const ROLE_LABEL: Record<string, string> = { trader: '交易大腦', reviewer: '審查委員', both: '兩者皆可' }
-export const SOURCE_LABEL: Record<string, string> = { builtin: '內建', upload: '上傳', distill: '蒸餾' }
+export const SOURCE_LABEL: Record<string, string> = { nuwa: '女媧蒸餾', upload: '上傳', builtin: '內建', distill: '蒸餾' }
 export const MARKET_LABEL: Record<string, string> = { crypto: '加密貨幣', us: '美股', tw: '台股' }
 export const MARKETS = ['crypto', 'us', 'tw'] as const
 
@@ -52,11 +51,15 @@ export function PersonaStatusBadge({ p }: { p: Pick<Persona, 'status' | 'paper_p
       </span>
     )
   }
-  return <span className="badge badge-gold">未評分</span>
+  return (
+    <span className="badge badge-gold" title="沒有附保真度評分或未達門檻，只能用在模擬帳戶">
+      僅限模擬
+    </span>
+  )
 }
 
 export function personaScoreText(p: Persona): string {
-  return hasFidelity(p.fidelity) ? `${p.fidelity.score} 分（${p.fidelity.grade}）` : '未評分'
+  return hasFidelity(p.fidelity) ? `${p.fidelity.score} 分（${p.fidelity.grade}）` : '未附評分'
 }
 
 /** 規則模式的標的範圍描述；手動清單回傳 null */
