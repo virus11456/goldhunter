@@ -2,14 +2,11 @@
 // 只在 `vite build --mode demo` 時打包；正式版不會包含這個檔案。
 import fixtures from './fixtures.json'
 import { ApiError } from '../api'
-import { adaptFixtures, botInstruments, computeMasters, mockEntryAnalysis, planFor, planToBot, priceOf } from './masters'
 
 type Json = any // eslint-disable-line @typescript-eslint/no-explicit-any
 
 const db: Json = JSON.parse(JSON.stringify(fixtures))
 let nextId = 1000
-// 舊版 fixture（內建大師、審查委員會）→ 新模型：女媧上傳的大師、各自的大師組合
-if ((db.personas as Json[] | undefined)?.some((p) => p.source === 'builtin')) adaptFixtures(db)
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const now = () => new Date().toISOString()
@@ -172,26 +169,14 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
         if (seg[2] === 'entry-analysis') {
           const bot = find(db.bots)
           if (!bot.running) throw new ApiError(400, 'Bot 未啟動')
-          await wait(500)
+          await wait(400)
+          const res = clone(db.entry_analysis[String(id)] ?? { entry: normEntry(bot.entry), items: [] })
           const dir = q.get('direction')
-          const insts = botInstruments(bot)
-          return {
-            entry: { mode: 'market', max_wait_bars: null, skip_negative_ev: false, ...(bot.entry || {}) },
-            items: insts.map((inst, i) => {
-              const recent = (db.decisions as Json[]).find((d) => d.bot_id === id && d.instrument === inst && (d.action === 'open_long' || d.action === 'open_short'))
-              const sigDir = i === 0 && recent ? (recent.action === 'open_long' ? 'long' : 'short') : null
-              const d = sigDir ?? dir
-              const signal = sigDir
-                ? { action: recent.action, stop_loss: recent.decision?.stop_loss ?? null, take_profit: recent.decision?.take_profit ?? null, reasoning: recent.decision?.reasoning, from_log: bot.mode === 'ai_trader' }
-                : null
-              const pending = i === 1 && bot.entry?.mode === 'smart' ? { level: priceOf(db, inst) * 0.992, label: '回檔 0.5 ATR', bars_left: 4, action: 'open_long' } : null
-              return {
-                instrument: inst, signal, pending,
-                analysis: d ? mockEntryAnalysis(priceOf(db, inst), d, bot.timeframe, id * 10 + i, signal?.stop_loss, signal?.take_profit) : null,
-                hypothetical: d ? !sigDir : undefined,
-              }
-            }),
-          }
+          const hypo = dir === 'long' ? db.analysis_entry_long : dir === 'short' ? db.analysis_entry_short : null
+          // 展示：假設做多 / 做空時，沒有訊號的 BTC 用錄好的假設分析（其他幣種展示資料沒有錄）
+          for (const it of res.items as Json[])
+            if (hypo?.analysis && !it.analysis && it.instrument === 'crypto:BTC/USDT:perp') Object.assign(it, { analysis: clone(hypo.analysis), hypothetical: true })
+          return res
         }
         return db.bots
       case 'dashboard':
@@ -215,7 +200,7 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
       case 'intel':
         return seg[1] === 'settings' ? db.intel_settings : db.intel_snapshot
       case 'masters':
-        return computeMasters(db, (b) => !!b.running)
+        return (db.masters as Json[]).map((m) => ({ ...m, running: !!db.bots.find((b: Json) => b.id === m.bot_id)?.running }))
       case 'personas':
         if (seg[1]) return clone({ ...personaDetail(id), used_by_bots: personaUsage(id) })
         return db.personas.map((p: Json) => ({ ...p, used_by_bots: personaUsage(p.id) }))
@@ -409,20 +394,10 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
     }
   }
 
-  // ---- 進場分析（回測頁） ----
+  // ---- 進場分析（回測頁）：真實後端錄下的結果 ----
   if (seg[0] === 'analysis' && seg[1] === 'entry') {
     await wait(900)
-    const st = db.strategies.find((s: Json) => s.id === body.strategy_id) ?? notFound()
-    if (st.kind === 'tradingview' && !body.direction) throw new ApiError(400, 'TradingView 訊號策略由 TradingView 產生訊號，請指定方向做假設分析')
-    const price = priceOf(db, body.symbol)
-    // 展示：均線策略目前有做多訊號，其餘策略目前沒有訊號
-    const hasSignal = st.kind === 'ma_cross'
-    const signal = hasSignal
-      ? { action: 'open_long', stop_loss: price * 0.982, take_profit: price * 1.04, size_pct: 10, reasoning: 'EMA20 上穿 EMA50，順勢做多', confidence: 1 }
-      : st.kind === 'ai' || st.kind === 'tradingview' ? null : { action: 'hold', stop_loss: null, take_profit: null, size_pct: 0, reasoning: '沒有交叉，觀望', confidence: 0 }
-    const dir = hasSignal ? 'long' : body.direction
-    if (!dir) return { signal, analysis: null, note: '目前沒有進場訊號；可指定做多或做空，看假設現在進場的盈虧比' }
-    return { signal, analysis: mockEntryAnalysis(price, dir, body.timeframe, st.id * 31 + (dir === 'long' ? 1 : 2), hasSignal ? signal!.stop_loss : null, hasSignal ? signal!.take_profit : null), hypothetical: !hasSignal }
+    return clone(body.direction === 'long' ? db.analysis_entry_long : body.direction === 'short' ? db.analysis_entry_short : db.analysis_entry)
   }
 
   // ---- 投資大師 ----
@@ -444,41 +419,43 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
     if (seg[2] === 'portfolio-plan') {
       await wait(1800)
       const d = personaDetail(id)
-      const plan = planFor(d.name)
-      d.meta = { ...(d.meta || {}), portfolio_plan: plan }
+      // 展示：回傳這位大師錄好的組合計畫；沒有的話借用第一份計畫
+      const plan = d.meta?.portfolio_plan ?? Object.values(db.persona_detail as Record<string, Json>).find((x) => x.meta?.portfolio_plan)?.meta.portfolio_plan
+      if (!plan) throw new ApiError(502, '展示模式沒有這位大師的組合計畫')
       return clone(plan)
     }
     if (seg[2] === 'portfolio') {
       await wait(900)
       const d = personaDetail(id)
       const acc = db.accounts.find((a: Json) => a.id === body.account_id) ?? notFound()
-      const f = planToBot(body.plan)
+      const plan = body.plan
+      const u = plan.universe
       const name = body.name || `${d.name} 組合`
       const st = { id: nextId++, name: `AI 交易員｜${name}`, kind: 'ai', code: null, pine_source: null, status: 'active', created_at: now(),
-        params: { instructions: body.plan.instructions, reference_strategy_id: null, min_confidence: 0.6, persona_id: d.id, bars: 40 } }
+        params: { instructions: plan.instructions, reference_strategy_id: null, min_confidence: 0.6, persona_id: d.id, bars: 40 } }
       db.strategies.push(st)
-      d.meta = { ...(d.meta || {}), portfolio_plan: body.plan }
+      d.meta = { ...(d.meta || {}), portfolio_plan: plan }
       const capital = acc.paper ? body.capital ?? 10000 : null
-      const b: Json = { id: nextId++, name, account_id: acc.id, strategy_id: st.id, ai_model_id: body.ai_model_id, ...f, capital,
-        copilot: { ...db.meta.copilot_defaults, review: false, manage: false, tune: false }, params_override: {},
-        risk: { ...db.meta.risk_defaults, ...f.risk }, status: 'stopped', running: false, last_error: null, last_run_at: null, created_at: now(),
+      const universe = u.mode === 'rules' ? { mode: 'rules', top_n: u.top_n, exclude_meme: u.exclude_meme, include_only: u.include_only } : { mode: 'list' }
+      const symbols = u.mode === 'list' ? u.symbols.map((x: string) => `crypto:${x}/USDT:perp`) : []
+      const risk = { ...db.meta.risk_defaults, max_position_pct: plan.position_pct, max_leverage: plan.max_leverage, max_positions: plan.max_positions,
+        long_only: !plan.allow_short, max_total_exposure_pct: Math.min(1000, plan.position_pct * plan.max_positions * plan.max_leverage) }
+      const running = body.start !== false
+      const b: Json = { id: nextId++, name, account_id: acc.id, strategy_id: st.id, ai_model_id: body.ai_model_id, symbols, universe, capital,
+        timeframe: plan.timeframe, interval_sec: ({ '15m': 60, '1h': 120, '4h': 300, '1d': 600 } as Record<string, number>)[plan.timeframe] ?? 120,
+        entry: normEntry({ mode: plan.entry_mode }), copilot: { ...db.meta.copilot_defaults, review: false, manage: false, tune: false },
+        params_override: {}, risk, status: running ? 'running' : 'stopped', running, last_error: null, last_run_at: running ? now() : null, created_at: now(),
         webhook_secret: Math.random().toString(36).slice(2, 14), strategy_name: st.name, strategy_kind: 'ai', mode: 'ai_trader',
-        ai_trader: { instructions: body.plan.instructions, reference_strategy_id: null, min_confidence: 0.6, persona_id: d.id },
+        ai_trader: { instructions: plan.instructions, reference_strategy_id: null, min_confidence: 0.6, persona_id: d.id },
         copilot_enabled: false, copilot_active: false, halted_reason: null, equity: capital, baseline_equity: null }
       db.bots.push(b)
       db.equity[String(b.id)] = capital ? [{ ts: now(), equity: capital, baseline_equity: null }] : []
-      db.positions[String(b.id)] = { running: false, positions: [], balance: null }
-      let started = false
-      let error: string | null = null
-      if (body.start !== false) {
-        if (!acc.paper && d.status !== 'active') error = `大師「${d.name}」${d.status === 'paper_only' ? '仍在模擬期' : '保真度未達標'}，只能用在模擬帳戶`
-        else {
-          Object.assign(b, { running: true, status: 'running', last_run_at: now() })
-          db.positions[String(b.id)] = { running: true, positions: [], balance: { currency: 'USDT', total: capital ?? 0, free: capital ?? 0 } }
-          started = true
-        }
-      }
-      return { bot_id: b.id, started, error }
+      db.positions[String(b.id)] = { running, positions: [], balance: running ? { currency: 'USDT', total: capital ?? 0, free: capital ?? 0 } : null }
+      db.masters.push({ bot_id: b.id, name, running, status: b.status, persona: { id: d.id, name: d.name, status: d.status, fidelity: d.fidelity?.score ?? null },
+        timeframe: b.timeframe, universe, symbols, risk: { max_leverage: risk.max_leverage, max_positions: risk.max_positions, max_position_pct: risk.max_position_pct, long_only: risk.long_only },
+        plan, start_equity: capital, equity: capital, return_pct: 0, max_drawdown_pct: 0, trades: 0, closed_trades: 0, win_rate_pct: null, realized_pnl: 0,
+        open_positions: running ? 0 : null, curve: capital ? [{ ts: now(), pct: 0 }] : [] })
+      return { bot_id: b.id, started: running, error: null }
     }
     const d = personaDetail(id)
     if (seg[2] === 'promote') {
