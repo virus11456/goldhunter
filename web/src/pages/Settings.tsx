@@ -3,11 +3,13 @@ import Accounts from './settings/Accounts'
 import AIModels from './settings/AIModels'
 import Bots from './settings/Bots'
 import Intel from './settings/Intel'
+import Personas from './settings/Personas'
 import Strategies from './settings/Strategies'
 
 const TABS = [
   { id: 'accounts', label: '交易所帳戶' },
   { id: 'ai', label: 'AI 模型' },
+  { id: 'personas', label: '投資大師' },
   { id: 'strategies', label: '策略' },
   { id: 'bots', label: 'Bots 機器人' },
   { id: 'intel', label: '資料來源' },
@@ -34,6 +36,7 @@ export default function Settings() {
       <div key={tab} className="anim-fade">
         {tab === 'accounts' && <Accounts />}
         {tab === 'ai' && <AIModels />}
+        {tab === 'personas' && <Personas />}
         {tab === 'strategies' && <Strategies />}
         {tab === 'bots' && <Bots />}
         {tab === 'intel' && <Intel />}

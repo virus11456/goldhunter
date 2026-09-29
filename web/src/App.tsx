@@ -42,7 +42,7 @@ function Shell({ children }: { children: ReactNode }) {
           <NavLink to="/" className="flex items-center gap-2.5">
             <Logo />
             <span className="text-lg font-bold tracking-tight text-gold">GoldHunter</span>
-            <span className="hidden text-xs text-muted lg:inline">量化交易平台</span>
+            <span className="hidden text-xs text-muted lg:inline">智能量化交易策略平台</span>
           </NavLink>
           <nav className="ml-4 hidden items-center gap-1 md:flex">
             {NAV.map((n) => (

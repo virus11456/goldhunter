@@ -36,7 +36,7 @@ export default function Login() {
           <Logo size={40} />
           <div>
             <div className="text-2xl font-bold tracking-tight text-gold">GoldHunter</div>
-            <div className="text-xs text-muted">單人量化交易平台</div>
+            <div className="text-xs text-muted">智能量化交易策略平台</div>
           </div>
         </div>
         <label className="label" htmlFor="token">API Token</label>

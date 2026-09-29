@@ -354,14 +354,30 @@ export interface Bot {
   copilot_enabled: boolean
   mode: BotMode
   ai_trader: AITraderIn | null
+  universe?: UniverseRules | Record<string, never> | null
 }
 
 export type BotMode = 'ai_trader' | 'strategy' | 'tradingview'
+
+export type VetoRule = 'any' | 'majority'
 
 export interface AITraderIn {
   instructions: string
   reference_strategy_id: number | null
   min_confidence: number
+  persona_id?: number | null // 交易大腦（投資大師）
+  reviewer_ids?: number[] // 審查委員
+  veto_rule?: VetoRule | string
+}
+
+/** 標的範圍（backend engine/universe.py UniverseRules）；空物件＝手動清單 */
+export interface UniverseRules {
+  mode: 'list' | 'rules' | string
+  top_n?: number
+  exclude_meme?: boolean
+  exclude?: string[]
+  include_only?: string[]
+  refresh_hours?: number
 }
 
 export interface BotIn {
@@ -376,6 +392,7 @@ export interface BotIn {
   risk: Partial<RiskConfig>
   copilot: Partial<CopilotConfig>
   params_override: Params
+  universe?: UniverseRules | Record<string, never>
 }
 
 export interface Dashboard {
@@ -436,6 +453,23 @@ export interface DecisionPayload {
   confidence?: number
   reasoning?: string
   source?: string
+  meta?: DecisionMeta | null
+}
+
+export interface CommitteeOpinion {
+  name: string
+  verdict: 'approve' | 'veto' | string
+  reasoning: string
+}
+
+export interface DecisionMeta {
+  persona?: string
+  committee?: {
+    rule: VetoRule | string
+    vetoed: boolean
+    proposed?: Action | string
+    opinions: CommitteeOpinion[]
+  }
 }
 
 export interface DecisionLog {
@@ -553,6 +587,129 @@ export interface IntelSnapshot {
   events: IntelEvent[]
   prompt: string
 }
+
+// ------------------------------ 投資大師（Persona） ------------------------------
+export type PersonaRole = 'trader' | 'reviewer' | 'both'
+export type PersonaSource = 'builtin' | 'upload' | 'distill'
+export type PersonaStatus = 'draft' | 'paper_only' | 'active'
+export type PersonaMarket = 'crypto' | 'us' | 'tw'
+
+export interface FidelityDimension {
+  name: string
+  score: number
+  max: number
+  reason: string
+}
+
+export interface FidelityQuestion {
+  type: 'stance' | 'out_of_scope' | 'scenario' | string
+  question: string
+  expected: string
+  answer: string
+}
+
+export interface FidelityReport {
+  score: number
+  grade: 'A' | 'B' | 'C' | 'D' | string
+  passed: boolean
+  dimensions: FidelityDimension[]
+  questions: FidelityQuestion[]
+  summary: string
+}
+
+export interface CostEstimate {
+  depth: 'quick' | 'standard' | string
+  depth_label: string
+  input_tokens: number
+  output_tokens: number
+  web_searches: number
+  usd: number | null
+  note: string
+  model?: string
+}
+
+export interface OnchainSummary {
+  fills: number
+  period_days?: number
+  top_coins?: [string, number][]
+  open_trades?: number
+  long_ratio_pct?: number | null
+  trades_per_day?: number
+  win_rate_pct?: number | null
+  avg_win?: number | null
+  avg_loss?: number | null
+  total_closed_pnl?: number
+  median_notional_usd?: number
+  avg_hold_hours?: number | null
+  most_active_utc_hours?: number[]
+}
+
+export interface PersonaMeta {
+  files?: string[]
+  truncated?: boolean
+  filename?: string
+  depth?: string
+  model?: string
+  onchain?: OnchainSummary | null
+  hyperliquid_address?: string | null
+  estimate?: CostEstimate
+  [k: string]: unknown
+}
+
+export interface Persona {
+  id: number
+  slug: string | null
+  name: string
+  role: PersonaRole | string
+  markets: (PersonaMarket | string)[]
+  summary: string
+  source: PersonaSource | string
+  status: PersonaStatus | string
+  status_label?: string
+  fidelity: FidelityReport | Record<string, never>
+  approved_at: ISODate | null
+  paper_days: number
+  min_paper_trades: number
+  meta: PersonaMeta
+  created_at: ISODate
+  // computed
+  paper_progress: PaperProgress | null
+  profile_chars: number
+  used_by_bots: number
+  pass_score: number
+}
+
+export interface PersonaDetail extends Persona {
+  profile: string
+}
+
+export interface PersonaUploadIn {
+  filename: string
+  content_base64: string
+  role: PersonaRole | string
+  markets: string[]
+}
+
+export interface PersonaDistillIn {
+  name: string
+  ai_model_id: number
+  depth: 'quick' | 'standard'
+  corpus?: string | null
+  hyperliquid_address?: string | null
+  role: PersonaRole | string
+  markets: string[]
+}
+
+export interface PersonaUpdateIn {
+  name: string
+  role: PersonaRole | string
+  markets: string[]
+  summary: string
+  profile: string
+}
+
+export const hasFidelity = (f: Persona['fidelity'] | null | undefined): f is FidelityReport =>
+  !!f && typeof (f as FidelityReport).score === 'number'
 
 export interface BacktestIn {
   strategy_id: number
@@ -689,6 +846,17 @@ export const api = {
   regenWebhookSecret: (id: number) => post<{ webhook_secret: string }>(`/bots/${id}/regenerate-webhook-secret`),
   botPositions: (id: number) => get<PositionsResponse>(`/bots/${id}/positions`),
   botSignal: (id: number, b: ManualSignal) => post<DecisionLog>(`/bots/${id}/signal`, b),
+
+  // personas（投資大師）
+  listPersonas: () => get<Persona[]>('/personas'),
+  getPersona: (id: number) => get<PersonaDetail>(`/personas/${id}`),
+  uploadPersona: (b: PersonaUploadIn) => post<PersonaDetail>('/personas/upload', b),
+  estimatePersona: (b: PersonaDistillIn) => post<CostEstimate>('/personas/estimate', b),
+  distillPersona: (b: PersonaDistillIn) => post<PersonaDetail>('/personas/distill', b),
+  personaFidelity: (id: number, ai_model_id: number) => post<PersonaDetail>(`/personas/${id}/fidelity`, { ai_model_id }),
+  updatePersona: (id: number, b: PersonaUpdateIn) => put<PersonaDetail>(`/personas/${id}`, b),
+  promotePersona: (id: number) => post<Persona>(`/personas/${id}/promote`),
+  deletePersona: (id: number) => del<{ ok: boolean }>(`/personas/${id}`),
 
   // records
   trades: (botId?: number | null, limit = 200) =>

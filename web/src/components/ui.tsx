@@ -383,17 +383,19 @@ export function SideBadge({ side }: { side: string }) {
 }
 
 /** AI 交易員（AI 自主決策）或 AI 審核（你的策略 + AI 把關） */
-export function AiBadge({ mode = 'review' }: { mode?: 'trader' | 'review' }) {
+export function AiBadge({ mode = 'review', persona }: { mode?: 'trader' | 'review'; persona?: string }) {
   return (
-    <span className="badge border-gold/40 bg-gold/10 text-gold">
+    <span className="badge border-gold/40 bg-gold/10 text-gold" title={persona ? `交易大腦：${persona}` : undefined}>
       <Icons.sparkle className="h-3 w-3" />
       {mode === 'trader' ? 'AI 交易員' : 'AI 審核'}
+      {mode === 'trader' && persona && <span>・{persona.split(/[·・]/).pop()?.trim() || persona}</span>}
     </span>
   )
 }
 
-export function BotAiBadge({ bot }: { bot: { mode?: string; copilot_active?: boolean; copilot_enabled?: boolean } }) {
-  if (bot.mode === 'ai_trader') return <AiBadge mode="trader" />
+/** persona：AI 交易員使用的投資大師名字（選填） */
+export function BotAiBadge({ bot, persona }: { bot: { mode?: string; copilot_active?: boolean; copilot_enabled?: boolean }; persona?: string }) {
+  if (bot.mode === 'ai_trader') return <AiBadge mode="trader" persona={persona} />
   if (bot.copilot_active || bot.copilot_enabled) return <AiBadge mode="review" />
   return null
 }

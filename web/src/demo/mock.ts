@@ -53,8 +53,78 @@ function modeFields(st: Json) {
   const p = st?.params ?? {}
   return {
     mode,
-    ai_trader: mode === 'ai_trader' ? { instructions: p.instructions, reference_strategy_id: p.reference_strategy_id ?? null, min_confidence: p.min_confidence ?? 0.6 } : null,
+    ai_trader: mode === 'ai_trader'
+      ? { instructions: p.instructions, reference_strategy_id: p.reference_strategy_id ?? null, min_confidence: p.min_confidence ?? 0.6,
+          persona_id: p.persona_id ?? null, reviewer_ids: p.reviewer_ids ?? [], veto_rule: p.veto_rule ?? 'any' }
+      : null,
   }
+}
+
+const UNIVERSE_DEFAULT = { mode: 'list', top_n: 10, exclude_meme: true, exclude: [], include_only: [], refresh_hours: 6 }
+/** 與後端相同：有傳 universe 就補齊預設值，否則為 {} */
+function normUniverse(u: Json): Json {
+  return u && Object.keys(u).length ? { ...UNIVERSE_DEFAULT, ...u } : {}
+}
+
+// ---- 投資大師 ----
+const STATUS_LABEL: Record<string, string> = { draft: '未評分', paper_only: '模擬期', active: '已啟用' }
+
+function personaUsage(pid: number): number {
+  return db.bots.filter((b: Json) => b.ai_trader && (b.ai_trader.persona_id === pid || (b.ai_trader.reviewer_ids || []).includes(pid))).length
+}
+
+function personaSummary(d: Json): Json {
+  const { profile, ...rest } = d
+  return { ...rest, profile_chars: (profile || '').length, used_by_bots: personaUsage(d.id), status_label: STATUS_LABEL[d.status] ?? d.status }
+}
+
+function savePersona(d: Json): Json {
+  d.profile_chars = (d.profile || '').length
+  d.status_label = STATUS_LABEL[d.status] ?? d.status
+  d.used_by_bots = personaUsage(d.id)
+  db.persona_detail[String(d.id)] = d
+  const i = db.personas.findIndex((x: Json) => x.id === d.id)
+  const row = personaSummary(d)
+  if (i >= 0) db.personas[i] = row
+  else db.personas.push(row)
+  return clone(d)
+}
+
+function personaDetail(pid: number): Json {
+  return db.persona_detail[String(pid)] ?? notFound()
+}
+
+const shortName = (n: string) => n.split(/[·・]/).pop()?.trim() || n
+const newProgress = () => ({ days: 0, days_required: 7, trades: 0, trades_required: 3, ready: false })
+
+function b64ToText(b64: string): string {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
+function parseUpload(filename: string, b64: string): { name: string; description: string; profile: string } {
+  const stem = filename.replace(/\.[^.]+$/, '')
+  if (/\.zip$/i.test(filename)) {
+    return { name: stem, description: '', profile: `# ${stem}\n\n（展示模式無法解壓縮，實際使用時會讀取 SKILL.md 與 references/）` }
+  }
+  if (!/\.(md|txt)$/i.test(filename)) throw new ApiError(400, '請上傳 SKILL.md（或 .txt），或整個 skill 資料夾壓成的 .zip')
+  let text = b64ToText(b64)
+  let description = ''
+  const fm = /^---\s*\n([\s\S]*?)\n---\s*\n/.exec(text)
+  if (fm) {
+    const m = /^description:\s*\|?\s*(.*)$/m.exec(fm[1])
+    description = (m?.[1] ?? '').trim()
+    const nm = /^name:\s*(.*)$/m.exec(fm[1])
+    text = text.slice(fm[0].length)
+    if (!/^#\s+/m.test(text) && nm) text = `# ${nm[1].trim()}\n\n${text}`
+  }
+  const title = /^#\s+(.+)$/m.exec(text)?.[1]?.trim() || stem
+  const name = title.split(/[·|｜:：]/)[0].trim() || title
+  const profile = text.trim().slice(0, 40_000)
+  if (profile.length < 300) throw new ApiError(400, '內容太短，不像是完整的蒸餾檔（至少需要心智模型與決策規則）')
+  return { name, description: description.slice(0, 200), profile }
 }
 
 export async function mockRequest(method: string, fullPath: string, body?: Json): Promise<Json> {
@@ -101,6 +171,9 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
         return db.backtests
       case 'intel':
         return seg[1] === 'settings' ? db.intel_settings : db.intel_snapshot
+      case 'personas':
+        if (seg[1]) return clone({ ...personaDetail(id), used_by_bots: personaUsage(id) })
+        return db.personas.map((p: Json) => ({ ...p, used_by_bots: personaUsage(p.id) }))
     }
     notFound()
   }
@@ -267,7 +340,7 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
       const copilot = { ...db.meta.copilot_defaults, ...(body.copilot || {}) }
       const b = { id: nextId++, created_at: now(), status: 'stopped', running: false, last_error: null, last_run_at: null,
         webhook_secret: Math.random().toString(36).slice(2, 14), equity: null, baseline_equity: null, halted_reason: null,
-        params_override: {}, ...body, copilot, risk: { ...db.meta.risk_defaults, ...(body.risk || {}) },
+        params_override: {}, ...body, universe: normUniverse(body.universe), copilot, risk: { ...db.meta.risk_defaults, ...(body.risk || {}) },
         strategy_name: st?.name ?? null, strategy_kind: st?.kind ?? null,
         copilot_enabled: !!body.ai_model_id && (copilot.review || copilot.manage || copilot.tune), copilot_active: false,
         ...modeFields(st), strategy_id: st?.id ?? null }
@@ -281,12 +354,75 @@ export async function mockRequest(method: string, fullPath: string, body?: Json)
       if (bot.running) throw new ApiError(400, '請先停止 Bot 再修改設定')
       const st = traderStrategy(body, bot) ?? db.strategies.find((s: Json) => s.id === body.strategy_id)
       const copilot = { ...db.meta.copilot_defaults, ...(body.copilot || {}) }
-      Object.assign(bot, body, modeFields(st), { strategy_id: st?.id, copilot, strategy_name: st?.name, strategy_kind: st?.kind,
+      Object.assign(bot, body, modeFields(st), { universe: normUniverse(body.universe), strategy_id: st?.id, copilot, strategy_name: st?.name, strategy_kind: st?.kind,
         copilot_enabled: !!body.ai_model_id && (copilot.review || copilot.manage || copilot.tune) })
       return bot
     }
     if (method === 'DELETE') {
       db.bots = db.bots.filter((b: Json) => b.id !== id)
+      return { ok: true }
+    }
+  }
+
+  // ---- 投資大師 ----
+  if (seg[0] === 'personas') {
+    if (seg[1] === 'estimate') {
+      const m = db.ai_models.find((x: Json) => x.id === body.ai_model_id) ?? notFound()
+      const base = db.persona_estimate
+      const quick = body.depth === 'quick'
+      const tin = quick ? 90_000 : base.input_tokens
+      const tout = quick ? 12_000 : base.output_tokens
+      if (m.provider !== 'anthropic')
+        return { depth: body.depth, depth_label: quick ? '快速' : '標準', input_tokens: tin, output_tokens: tout, web_searches: 0, usd: null,
+          note: '此供應商不支援網路搜尋，只能用模型本身的知識蒸餾；費用依該供應商價格計算', model: m.model || m.provider }
+      return { ...base, depth: body.depth, depth_label: quick ? '快速' : '標準', input_tokens: tin, output_tokens: tout,
+        web_searches: quick ? 8 : base.web_searches, usd: quick ? Math.round(base.usd * 0.4 * 100) / 100 : base.usd, model: m.model || m.provider }
+    }
+    if (seg[1] === 'distill') {
+      await wait(3000)
+      const src = clone(db.distill_result)
+      const d = { ...src, id: nextId++, slug: null, name: body.name, role: body.role, markets: body.markets, created_at: now(), approved_at: now(),
+        profile: String(src.profile).split(src.name).join(body.name), paper_progress: newProgress(),
+        meta: { ...src.meta, depth: body.depth, hyperliquid_address: body.hyperliquid_address ?? null, onchain: null } }
+      if (d.fidelity?.summary) d.fidelity.summary = String(d.fidelity.summary).split(src.name).join(body.name)
+      return savePersona(d)
+    }
+    if (seg[1] === 'upload') {
+      const parsed = parseUpload(String(body.filename), String(body.content_base64))
+      const d = { id: nextId++, slug: null, name: parsed.name, role: body.role, markets: body.markets, summary: parsed.description,
+        profile: parsed.profile, source: 'upload', status: 'draft', fidelity: {}, approved_at: null, paper_days: 7, min_paper_trades: 3,
+        meta: { files: [body.filename], truncated: false, filename: body.filename }, created_at: now(), paper_progress: null, pass_score: 70 }
+      return savePersona(d)
+    }
+    const d = personaDetail(id)
+    if (seg[2] === 'fidelity') {
+      await wait(2500)
+      const ref = db.persona_detail['1']
+      const refShort = shortName(ref.name)
+      const f = clone(ref.fidelity)
+      const swap = (t: string) => t.split(ref.name).join(d.name).split(refShort).join(shortName(d.name))
+      f.summary = swap(f.summary)
+      f.dimensions.forEach((x: Json) => (x.reason = swap(x.reason)))
+      f.questions.forEach((q: Json) => Object.keys(q).forEach((k) => (q[k] = swap(String(q[k])))))
+      d.fidelity = f
+      if (d.status === 'draft') Object.assign(d, { status: 'paper_only', approved_at: now(), paper_progress: newProgress() })
+      return savePersona(d)
+    }
+    if (seg[2] === 'promote') {
+      if (d.status !== 'paper_only') throw new ApiError(400, '只有保真度通過、模擬期中的大師可以開放實盤')
+      Object.assign(d, { status: 'active', paper_progress: null })
+      return personaSummary(savePersona(d))
+    }
+    if (method === 'PUT') {
+      if (body.profile !== d.profile) Object.assign(d, { status: 'draft', fidelity: {}, approved_at: null, paper_progress: null })
+      Object.assign(d, { name: body.name, role: body.role, markets: body.markets, summary: body.summary, profile: body.profile })
+      return savePersona(d)
+    }
+    if (method === 'DELETE') {
+      if (d.source === 'builtin') throw new ApiError(400, '內建大師不能刪除')
+      if (personaUsage(id)) throw new ApiError(400, '仍有 Bot 使用這位大師')
+      delete db.persona_detail[String(id)]
+      db.personas = db.personas.filter((p: Json) => p.id !== id)
       return { ok: true }
     }
   }

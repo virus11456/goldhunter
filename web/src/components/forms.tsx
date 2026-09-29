@@ -68,6 +68,43 @@ export function SymbolsInput({ value, onChange }: { value: string[]; onChange: (
   )
 }
 
+/** Bare coin chip input (e.g. ["DOGE", "PEPE"]) for universe rules */
+export function CoinChipsInput({ value, onChange, placeholder = '輸入幣種，按 Enter' }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
+  const [text, setText] = useState('')
+  const add = (b: string) => {
+    const base = cleanBase(b)
+    if (base && !value.includes(base)) onChange([...value, base])
+    setText('')
+  }
+  return (
+    <div className="flex min-h-[40px] flex-wrap items-center gap-1.5 rounded-lg border border-line bg-[#0f1216] px-2 py-1.5 focus-within:border-gold/70">
+      {value.map((c) => (
+        <span key={c} className="inline-flex items-center gap-1 rounded-md border border-line bg-panel2 py-0.5 pl-2 pr-1 font-mono text-xs text-slate-200">
+          {c}
+          <button type="button" className="rounded p-0.5 text-muted hover:bg-black/30 hover:text-white" onClick={() => onChange(value.filter((x) => x !== c))} aria-label={`移除 ${c}`}>
+            <Icons.x className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
+      <input
+        className="min-w-[90px] flex-1 bg-transparent px-1 py-0.5 font-mono text-sm uppercase text-slate-100 placeholder:normal-case placeholder:text-slate-500 focus:outline-none"
+        placeholder={value.length ? '' : placeholder}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ',' || e.key === ' ') {
+            e.preventDefault()
+            add(text)
+          } else if (e.key === 'Backspace' && !text && value.length) {
+            onChange(value.slice(0, -1))
+          }
+        }}
+        onBlur={() => text && add(text)}
+      />
+    </div>
+  )
+}
+
 /** Single symbol picker for backtest / intel preview */
 export function SymbolPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const base = baseOf(value)

@@ -17,6 +17,7 @@ import {
   useLoader,
   useToast,
 } from '../components/ui'
+import { botPersonaName, shortPersonaName, universeLabel, usePersonaNames } from '../lib/persona'
 import { fmtNum, fmtPrice, fmtQty, fmtShortTime, fmtSigned, fmtTime, kindLabel, paramLabel, parseDate, pnlClass, shortSymbol, timeAgo } from '../lib/format'
 
 const REFRESH = 10_000
@@ -74,6 +75,7 @@ export default function Monitor() {
   const bot = bots.data?.find((b) => b.id === botId) ?? null
   const [tab, setTab] = useState<'trades' | 'decisions'>('decisions')
   const { busy, run } = useAction()
+  const personaNames = usePersonaNames()
 
   const toggle = async (b: Bot) => {
     const r = await run(`run-${b.id}`, () => (b.running ? api.stopBot(b.id) : api.startBot(b.id)), b.running ? '已停止' : '已啟動')
@@ -113,7 +115,7 @@ export default function Monitor() {
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {(bot ? [bot] : bots.data).map((b) => (
-              <BotCard key={b.id} b={b} selected={botId === b.id} onSelect={() => select(b.id)} onToggle={() => toggle(b)} busy={busy === `run-${b.id}`} />
+              <BotCard key={b.id} b={b} persona={botPersonaName(b, personaNames)} selected={botId === b.id} onSelect={() => select(b.id)} onToggle={() => toggle(b)} busy={busy === `run-${b.id}`} />
             ))}
           </div>
         </>
@@ -147,7 +149,7 @@ export default function Monitor() {
 }
 
 // ------------------------------ bot card ------------------------------
-function BotCard({ b, selected, onSelect, onToggle, busy }: { b: Bot; selected: boolean; onSelect: () => void; onToggle: () => void; busy: boolean }) {
+function BotCard({ b, persona, selected, onSelect, onToggle, busy }: { b: Bot; persona?: string; selected: boolean; onSelect: () => void; onToggle: () => void; busy: boolean }) {
   const diff = b.equity !== null && b.baseline_equity !== null ? b.equity - b.baseline_equity : null
   return (
     <div
@@ -164,7 +166,7 @@ function BotCard({ b, selected, onSelect, onToggle, busy }: { b: Bot; selected: 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="truncate font-semibold text-slate-100">{b.name}</span>
-            <BotAiBadge bot={b} />
+            <BotAiBadge bot={b} persona={persona} />
           </div>
           <div className="mt-0.5 truncate text-xs">
             <span className="text-gold/90">{b.strategy_name ?? '—'}</span>
@@ -175,7 +177,10 @@ function BotCard({ b, selected, onSelect, onToggle, busy }: { b: Bot; selected: 
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1">
-        {b.symbols.map((s) => (
+        {universeLabel(b.universe) && (
+          <span className="rounded border border-gold/30 bg-gold/[0.06] px-1.5 py-0.5 text-[11px] text-amber-100">{universeLabel(b.universe)}</span>
+        )}
+        {!universeLabel(b.universe) && b.symbols.map((s) => (
           <span key={s} className="rounded border border-line bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-slate-300">
             {shortSymbol(s)}
           </span>
@@ -623,6 +628,33 @@ function Compare({ a, b }: { a: DecisionPayload; b: DecisionPayload }) {
   )
 }
 
+const PROPOSED: Record<string, string> = { open_long: '做多', open_short: '做空', close: '平倉', hold: '觀望' }
+
+function CommitteeBox({ c }: { c: NonNullable<NonNullable<DecisionPayload['meta']>['committee']> }) {
+  return (
+    <div className={`rounded-lg border p-3 ${c.vetoed ? 'border-down/30 bg-down/[0.05]' : 'border-up/30 bg-up/[0.05]'}`}>
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-semibold text-slate-100">審查委員會</span>
+        <span className={`badge ${c.vetoed ? 'badge-red' : 'badge-green'}`}>{c.vetoed ? '否決' : '通過'}</span>
+        <span className="text-muted">
+          提議：{PROPOSED[String(c.proposed)] ?? c.proposed ?? '—'}・規則：{c.rule === 'majority' ? '多數決' : '任一否決'}
+        </span>
+      </div>
+      <ul className="space-y-2">
+        {c.opinions.map((o, i) => (
+          <li key={i} className="text-sm">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-slate-100">{o.name}</span>
+              <span className={`badge ${o.verdict === 'veto' ? 'badge-red' : 'badge-green'}`}>{o.verdict === 'veto' ? '否決' : '通過'}</span>
+            </div>
+            {o.reasoning && <p className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-slate-300">{o.reasoning}</p>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function DecisionsTable({ botId, names }: { botId: number | null; names: Record<number, string> }) {
   const [hideHold, setHideHold] = useState(true)
   const { data, loading } = useLoader(() => api.decisions(botId, 100, hideHold), [botId, hideHold], REFRESH)
@@ -630,7 +662,7 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
   const toggle = (
     <label className="flex cursor-pointer items-center gap-2 border-b border-line px-4 py-2 text-xs text-muted">
       <input type="checkbox" className="accent-[#F0B90B]" checked={hideHold} onChange={(e) => setHideHold(e.target.checked)} />
-      隱藏「觀望 / 維持」（AI 沒有動作的判斷）
+      隱藏「觀望 / 維持」（AI 沒有動作的判斷，含被委員會否決的）
     </label>
   )
   if (loading && !data) return <Skeleton className="p-4" />
@@ -667,6 +699,8 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
             const cp = d.decision?.copilot
             const v = cp ? VERDICT[cp.verdict] ?? { label: cp.verdict, cls: 'badge-gray' } : null
             const isOpen = !!open[d.id]
+            const meta = d.decision?.meta
+            const cm = meta?.committee
             const summary = cp?.reasoning || d.decision?.reasoning || d.reasons[0] || ''
             return (
               <Fragment key={d.id}>
@@ -677,7 +711,12 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                   <td className="whitespace-nowrap font-mono text-xs text-muted">{fmtTime(d.ts, true)}</td>
                   {!botId && <td className="whitespace-nowrap text-xs text-gold/90">{names[d.bot_id] ?? `#${d.bot_id}`}</td>}
                   <td className="font-mono font-semibold text-slate-100">{shortSymbol(d.instrument)}</td>
-                  <td><SourceChip source={d.source} /></td>
+                  <td>
+                    <div className="flex flex-wrap gap-1">
+                      <SourceChip source={d.source} />
+                      {meta?.persona && <span className="badge badge-gold" title={`交易大腦：${meta.persona}`}>AI 交易員・{shortPersonaName(meta.persona)}</span>}
+                    </div>
+                  </td>
                   <td className={`whitespace-nowrap font-medium ${act.cls}`}>{act.text}</td>
                   <td className="whitespace-nowrap">
                     {d.action === 'hold' ? (
@@ -688,6 +727,7 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                       </span>
                     )}
                     {v && <span className={`badge ${v.cls}`}>{v.label}</span>}
+                    {cm && <span className={`badge ${cm.vetoed ? 'badge-red' : 'badge-green'}`}>{cm.vetoed ? '委員會否決' : '委員會通過'}</span>}
                   </td>
                   <td className="r whitespace-nowrap font-mono text-xs">
                     {d.decision?.size_pct ? `${fmtNum(d.decision.size_pct, 1)}%` : '—'}
@@ -723,6 +763,7 @@ function DecisionsTable({ botId, names }: { botId: number | null; names: Record<
                               )}
                             </div>
                           )}
+                          {cm && <CommitteeBox c={cm} />}
                           {d.reasons.length > 0 && (
                             <div>
                               <div className="label">風控 / 執行說明</div>

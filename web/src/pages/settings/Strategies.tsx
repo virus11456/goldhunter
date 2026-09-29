@@ -449,7 +449,7 @@ function StrategyRow({
   )
 }
 
-function OverflowMenu({ items }: { items: { label: string; icon?: ReactNode; onClick: () => void; danger?: boolean }[] }) {
+export function OverflowMenu({ items }: { items: { label: string; icon?: ReactNode; onClick: () => void; danger?: boolean }[] }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
